@@ -4,8 +4,12 @@ import bioast.mods.gt6scan.ScannerMod;
 import bioast.mods.gt6scan.gui.ImeBridge;
 import bioast.mods.gt6scan.gui.ScannerModeGui;
 import bioast.mods.gt6scan.network.scanmessage.HandlerClient;
+import bioast.mods.gt6scan.network.scanmessage.HandlerScanBegin;
+import bioast.mods.gt6scan.network.scanmessage.HandlerScanChunk;
 import bioast.mods.gt6scan.network.scanmessage.HandlerSurfaceClient;
-import bioast.mods.gt6scan.network.scanmessage.ScanResponse;
+import bioast.mods.gt6scan.network.scanmessage.ScanBeginResponse;
+import bioast.mods.gt6scan.network.scanmessage.ScanChunkResponse;
+import bioast.mods.gt6scan.network.scanmessage.ScanDoneResponse;
 import bioast.mods.gt6scan.network.scanmessage.SurfaceResponse;
 import com.cleanroommc.modularui.ModularUI;
 import cpw.mods.fml.client.FMLClientHandler;
@@ -21,8 +25,14 @@ public class ClientProxy extends CommonProxy {
     @Override
     public void preInit(FMLPreInitializationEvent event) {
         super.preInit(event);
-        CommonProxy.simpleNetworkWrapper.registerMessage(HandlerClient.class, ScanResponse.class,
+        // a scan arrives one chunk at a time: the begin message sets up the result grid, every scanned chunk is added
+        // to it, and the done message builds the view and opens the map (the ids match the dummies on the server)
+        CommonProxy.simpleNetworkWrapper.registerMessage(HandlerScanBegin.class, ScanBeginResponse.class,
             2, Side.CLIENT);
+        CommonProxy.simpleNetworkWrapper.registerMessage(HandlerScanChunk.class, ScanChunkResponse.class,
+            5, Side.CLIENT);
+        CommonProxy.simpleNetworkWrapper.registerMessage(HandlerClient.class, ScanDoneResponse.class,
+            6, Side.CLIENT);
         CommonProxy.simpleNetworkWrapper.registerMessage(HandlerSurfaceClient.class, SurfaceResponse.class,
             4, Side.CLIENT);
         ImeBridge.register();

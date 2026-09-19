@@ -28,6 +28,15 @@ public enum ScanMode {
         return LH.get("gt6scan.mode." + name().toLowerCase());
     }
 
+    /**
+     * The two fluid modes. Their scan result holds <em>fluid</em> ids instead of material ids: GT6's heavy, light,
+     * medium and extra heavy oil (and everything else without a material) are separate fluids, so only the fluid
+     * itself can tell them apart - a material id would show them all as "Oil".
+     */
+    public boolean isFluid() {
+        return this == FLUID || this == FLUID_BEDROCK;
+    }
+
     public boolean isTE() {
         switch (this) {
             case LARGE, ROCK, BEDROCK, SMALL, FLUID_BEDROCK -> {

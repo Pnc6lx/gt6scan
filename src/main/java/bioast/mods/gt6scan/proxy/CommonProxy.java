@@ -5,8 +5,10 @@ import bioast.mods.gt6scan.network.scanmessage.HandlerBroadcastServer;
 import bioast.mods.gt6scan.network.scanmessage.HandlerDummy;
 import bioast.mods.gt6scan.network.scanmessage.HandlerServer;
 import bioast.mods.gt6scan.network.scanmessage.HandlerSurfaceServer;
+import bioast.mods.gt6scan.network.scanmessage.ScanBeginResponse;
+import bioast.mods.gt6scan.network.scanmessage.ScanChunkResponse;
+import bioast.mods.gt6scan.network.scanmessage.ScanDoneResponse;
 import bioast.mods.gt6scan.network.scanmessage.ScanRequest;
-import bioast.mods.gt6scan.network.scanmessage.ScanResponse;
 import bioast.mods.gt6scan.network.scanmessage.SurfaceRequest;
 import bioast.mods.gt6scan.utils.ScanScheduler;
 import cpw.mods.fml.common.event.FMLInitializationEvent;
@@ -16,6 +18,7 @@ import cpw.mods.fml.common.event.FMLServerStartingEvent;
 import cpw.mods.fml.common.eventhandler.SubscribeEvent;
 import cpw.mods.fml.common.gameevent.PlayerEvent;
 import cpw.mods.fml.common.network.NetworkRegistry;
+import cpw.mods.fml.common.network.simpleimpl.IMessage;
 import cpw.mods.fml.common.network.simpleimpl.SimpleNetworkWrapper;
 import cpw.mods.fml.relauncher.Side;
 import gregapi.api.Abstract_Proxy;
@@ -40,13 +43,27 @@ public class CommonProxy extends Abstract_Proxy {
         ScanScheduler.register();
         simpleNetworkWrapper = NetworkRegistry.INSTANCE.newSimpleChannel("Scanning_channel");
         simpleNetworkWrapper.registerMessage(HandlerServer.class, ScanRequest.class, 1, Side.SERVER);
-        simpleNetworkWrapper.registerMessage(HandlerDummy.class, ScanResponse.class,
-            2, Side.SERVER);
+        // a scan is answered one chunk at a time: the map is set up by the begin message, every scanned chunk follows
+        // on its own (small) message and the done message tells the client that it may open the map. The dedicated
+        // server never handles these itself, but it has to know their ids to be able to send them, hence the dummies.
+        registerServerId(ScanBeginResponse.class, 2);
+        registerServerId(ScanChunkResponse.class, 5);
+        registerServerId(ScanDoneResponse.class, 6);
         // surface of a map cell: teleport the player there, or report it back for a JourneyMap waypoint
         simpleNetworkWrapper.registerMessage(HandlerSurfaceServer.class, SurfaceRequest.class, 3, Side.SERVER);
         // right click on the map: the chunk report is broadcast to every player in the public chat
         simpleNetworkWrapper.registerMessage(HandlerBroadcastServer.class, BroadcastRequest.class, 4,
             Side.SERVER);
+    }
+
+    /**
+     * Registers a server to client message on the server side without a handler of its own: the server only needs the
+     * discriminator id of the message to be able to send it, the client side registrations (see ClientProxy) do the
+     * real work. {@link HandlerDummy} is generic over the message type on purpose, so one class covers all of them.
+     */
+    @SuppressWarnings({ "unchecked", "rawtypes" })
+    private static void registerServerId(Class<? extends IMessage> messageType, int discriminator) {
+        simpleNetworkWrapper.registerMessage(HandlerDummy.class, (Class) messageType, discriminator, Side.SERVER);
     }
 
     /**
