@@ -2,6 +2,7 @@ package bioast.mods.gt6scan;
 
 import bioast.mods.gt6scan.item.ScannerMultiTool;
 import bioast.mods.gt6scan.proxy.CommonProxy;
+import bioast.mods.gt6scan.utils.ScanScheduler;
 import cpw.mods.fml.common.Mod;
 import cpw.mods.fml.common.SidedProxy;
 import cpw.mods.fml.common.event.*;
@@ -92,6 +93,11 @@ public class ScannerMod extends Abstract_Mod {
         allowTeleport = config.get("core",
             "allow_teleport (Def:true) allow the T teleport on the scan map, the world must also allow cheats",
             true);
+        // a scan is spread over server ticks, one budget per tick. More budget scans faster, but a server tick that
+        // runs long is a stalled tick - on a singleplayer world it is also the thread that renders the game.
+        ScanScheduler.setBudgetMs(config.get("core",
+            "scan_tick_budget_ms (Def:5) milliseconds per server tick spent on scanning, 1-50 (bigger = faster scan, longer stalls)",
+            ScanScheduler.DEFAULT_BUDGET_MS));
     }
 
     @Override

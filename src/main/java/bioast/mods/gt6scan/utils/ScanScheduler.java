@@ -19,8 +19,10 @@ import bioast.mods.gt6scan.ScannerMod;
 public final class ScanScheduler {
     public static final ScanScheduler INSTANCE = new ScanScheduler();
 
-    /** Time budget per server tick. 5ms is ~10% of a 50ms tick. */
-    private static final long BUDGET_NANOS = 5_000_000L;
+    /** Default time budget per server tick: 5ms is ~10% of a 50ms tick. Configurable, see {@link #setBudgetMs}. */
+    public static final int DEFAULT_BUDGET_MS = 5;
+    /** Time budget per server tick, set from the config. */
+    private static long budgetNanos = DEFAULT_BUDGET_MS * 1_000_000L;
 
     /** A piece of work. Must return true once it is completely done and must not do anything after that. */
     public interface Job {
@@ -43,7 +45,7 @@ public final class ScanScheduler {
     public void onServerTick(TickEvent.ServerTickEvent event) {
         if (event.phase != TickEvent.Phase.END) return;
         if (jobs.isEmpty()) return;
-        long deadline = System.nanoTime() + BUDGET_NANOS;
+        long deadline = System.nanoTime() + budgetNanos;
         Iterator<Job> it = jobs.iterator();
         while (it.hasNext()) {
             try {
@@ -55,6 +57,16 @@ public final class ScanScheduler {
             }
             if (System.nanoTime() >= deadline) break;
         }
+    }
+
+    /**
+     * Sets the per tick budget of every job from the config (see {@code scanner.cfg}, "scan_tick_budget_ms"). A scan
+     * spends this much time per tick at most and always does at least one chunk, so a bigger budget finishes the
+     * scan sooner at the price of a longer tick. What really costs the time is loading - or even generating - the
+     * chunks of the range, which a bigger budget cannot shorten, it only makes the stall longer.
+     */
+    public static void setBudgetMs(int millis) {
+        budgetNanos = Math.max(1, Math.min(millis, 50)) * 1_000_000L;
     }
 
     public static void register() {
