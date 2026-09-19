@@ -15,7 +15,6 @@ import bioast.mods.gt6scan.utils.ModularUIUtils;
 import cpw.mods.fml.relauncher.Side;
 import cpw.mods.fml.relauncher.SideOnly;
 import gregapi.data.LH;
-import gregapi.oredict.OreDictMaterial;
 
 /**
  * One entry of the right hand list: tick box, material icon, name and block count. Clicking it toggles the material
@@ -28,7 +27,6 @@ public class FilterRowWidget extends ButtonWidget<FilterRowWidget> {
 
     private final ScanViewState state;
     private final short matID;
-    private final OreDictMaterial mat;
     private final String name;
     private final int count;
     private final MaterialIcon icon;
@@ -38,9 +36,9 @@ public class FilterRowWidget extends ButtonWidget<FilterRowWidget> {
         this.state = state;
         this.matID = matID;
         this.count = count;
-        this.mat = OreDictMaterial.MATERIAL_ARRAY[matID];
-        this.name = ScanViewState.materialName(mat);
-        this.icon = ModularUIUtils.icon(mat, state.mode());
+        // the name and the icon come from the view: in the fluid modes an entry is a fluid, not a material
+        this.name = state.entryName(matID);
+        this.icon = ModularUIUtils.icon(state.mode(), matID);
         this.width = width;
         size(width, ROW_H);
         onMousePressed(mouseButton -> {
@@ -57,14 +55,14 @@ public class FilterRowWidget extends ButtonWidget<FilterRowWidget> {
 
     /** Used by the search field to hide rows whose name does not match. */
     public boolean matches(String query) {
-        return state.matchesSearch(mat, query);
+        return state.matchesSearch(matID, query);
     }
 
     @Override
     public void draw(ModularGuiContext context, WidgetThemeEntry<?> widgetTheme) {
         WidgetTheme theme = getActiveWidgetTheme(widgetTheme, isHovering());
         boolean selected = state.isSelected(matID);
-        int textColor = state.listColor(mat);
+        int textColor = state.entryListColor(matID);
         int line = theme.getTextColor();
 
         if (selected) GuiDraw.drawRect(0, 0, 2, ROW_H, textColor);
@@ -86,7 +84,7 @@ public class FilterRowWidget extends ButtonWidget<FilterRowWidget> {
 
     private void buildTooltip(RichTooltip tooltip) {
         tooltip.addLine(IKey.str(name + ": " + count)
-            .color(state.listColor(mat)));
+            .color(state.entryListColor(matID)));
         tooltip.addLine(
             IKey.str(LH.get(state.isSelected(matID) ? "gt6scan.gui.row_selected" : "gt6scan.gui.row_unselected"))
                 .color(0xFF909090));

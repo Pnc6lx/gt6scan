@@ -1,10 +1,12 @@
 package bioast.mods.gt6scan.utils;
 
 import net.minecraft.item.ItemStack;
+import net.minecraftforge.fluids.Fluid;
 import net.minecraftforge.fluids.FluidStack;
 
 import com.cleanroommc.modularui.widget.Widget;
 
+import bioast.mods.gt6scan.gui.FluidColour;
 import bioast.mods.gt6scan.gui.MaterialIcon;
 import bioast.mods.gt6scan.network.ScanMode;
 import cpw.mods.fml.relauncher.Side;
@@ -30,6 +32,33 @@ public class ModularUIUtils {
         } catch (Exception e) {
             return null;
         }
+    }
+
+    /**
+     * The stack to bookmark for a scanned entry. In the fluid modes that is the fluid's display item: NEI bookmarks
+     * are item stacks and GT6's oils have no material whose bucket could be used, they are fluids of their own.
+     */
+    public static ItemStack stackFor(ScanMode mode, short id) {
+        if (mode.isFluid()) {
+            Fluid fluid = FL.fluid(id);
+            return fluid == null ? null : FL.display(fluid);
+        }
+        OreDictMaterial mat = OreDictMaterial.MATERIAL_ARRAY[id];
+        return mat == null ? null : stackFor(mat, mode);
+    }
+
+    /** Icon of a scanned entry: the fluid's texture in the fluid modes, the material's fluid or item form otherwise. */
+    public static MaterialIcon icon(ScanMode mode, short id) {
+        if (mode.isFluid()) {
+            Fluid fluid = FL.fluid(id);
+            if (fluid == null) return new MaterialIcon(null, null);
+            // Forge's fluid API provides a still icon for every fluid, so that texture is what the list shows; a fluid
+            // without one (an icon that is drawn in code) gets a solid block of its colour instead
+            if (FluidColour.hasTexture(fluid)) return new MaterialIcon(null, new FluidStack(fluid, 1));
+            return new MaterialIcon(null, null, FluidColour.of(fluid));
+        }
+        OreDictMaterial mat = OreDictMaterial.MATERIAL_ARRAY[id];
+        return mat == null ? new MaterialIcon(null, null) : icon(mat, mode);
     }
 
     /**

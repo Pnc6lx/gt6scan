@@ -25,7 +25,6 @@ import bioast.mods.gt6scan.utils.ModularUIUtils;
 import cpw.mods.fml.relauncher.Side;
 import cpw.mods.fml.relauncher.SideOnly;
 import gregapi.data.LH;
-import gregapi.oredict.OreDictMaterial;
 import gregapi.util.UT;
 import org.lwjgl.input.Keyboard;
 
@@ -155,11 +154,10 @@ public class ScanMapWidget extends Widget<ScanMapWidget> implements Interactable
         hoverInside = localX >= 0 && localZ >= 0 && localX < state.mapPx && localZ < state.mapPx;
         hoverX = Math.max(0, Math.min(state.mapPx - 1, localX));
         hoverZ = Math.max(0, Math.min(state.mapPx - 1, localZ));
-        short matID = hoverInside ? state.matAt(hoverX, hoverZ) : 0;
+        short matID = hoverInside ? state.shownMatAt(hoverX, hoverZ) : 0;
         hoverHasMat = matID != 0;
-        OreDictMaterial mat = hoverHasMat ? OreDictMaterial.MATERIAL_ARRAY[matID] : null;
-        hoverName = hoverHasMat ? ScanViewState.materialName(mat) : LH.get("gt6scan.gui.nan");
-        hoverColor = hoverHasMat ? state.listColor(mat) : 0xFF404040;
+        hoverName = hoverHasMat ? state.entryName(matID) : LH.get("gt6scan.gui.nan");
+        hoverColor = hoverHasMat ? state.entryListColor(matID) : 0xFF404040;
     }
 
     /** Marks the hovered cell and the 16x16 chunk it belongs to, which is what the tooltip describes. */
@@ -205,10 +203,9 @@ public class ScanMapWidget extends Widget<ScanMapWidget> implements Interactable
         } else {
             for (int i = 0; i < entries.size() && i < TOOLTIP_LINES; i++) {
                 Map.Entry<Short, Integer> entry = entries.get(i);
-                OreDictMaterial mat = OreDictMaterial.MATERIAL_ARRAY[entry.getKey()];
                 tooltip.addLine(
-                    IKey.str(ScanViewState.materialName(mat) + ": " + entry.getValue())
-                        .color(state.listColor(mat)));
+                    IKey.str(state.entryName(entry.getKey()) + ": " + entry.getValue())
+                        .color(state.entryListColor(entry.getKey())));
             }
             if (entries.size() > TOOLTIP_LINES) {
                 tooltip.addLine(IKey.str("... +" + (entries.size() - TOOLTIP_LINES))
@@ -257,9 +254,9 @@ public class ScanMapWidget extends Widget<ScanMapWidget> implements Interactable
      * purely client side.
      */
     private void bookmarkHoveredItem() {
-        OreDictMaterial mat = chunkMaterial(hoverX, hoverZ);
-        if (mat == null) return; // nothing scanned in that chunk, so there is no material to bookmark
-        ItemStack stack = ModularUIUtils.stackFor(mat, state.mode());
+        short id = chunkEntry(hoverX, hoverZ);
+        if (id == 0) return; // nothing scanned in that chunk, so there is nothing to bookmark
+        ItemStack stack = ModularUIUtils.stackFor(state.mode(), id);
         if (stack == null) {
             notifyPlayer(LH.get("gt6scan.chat.no_bookmark_item"));
             return;
@@ -295,7 +292,7 @@ public class ScanMapWidget extends Widget<ScanMapWidget> implements Interactable
         } else {
             for (Map.Entry<Short, Integer> entry : entries) {
                 if (found.length() > 0) found.append(", ");
-                found.append(ScanViewState.materialName(OreDictMaterial.MATERIAL_ARRAY[entry.getKey()]))
+                found.append(state.entryName(entry.getKey()))
                     .append(": ")
                     .append(entry.getValue());
             }
@@ -363,10 +360,10 @@ public class ScanMapWidget extends Widget<ScanMapWidget> implements Interactable
         ScanMode mode = state.mode();
         if (mode == ScanMode.BEDROCK || mode == ScanMode.FLUID_BEDROCK) {
             // a bedrock vein is one material per chunk; without a scan result there is nothing to mark at all
-            OreDictMaterial mat = chunkMaterial(hoverX, hoverZ);
-            if (mat == null) return;
-            JourneyMapBridge.expectWaypoints(new String[]{bedrockWaypointName(mode, mat)},
-                new int[]{ScanViewState.rawColor(mat)});
+            short id = chunkEntry(hoverX, hoverZ);
+            if (id == 0) return;
+            JourneyMapBridge.expectWaypoints(new String[]{bedrockWaypointName(mode, id)},
+                new int[]{state.entryColor(id)});
         } else if (mode == ScanMode.DENSE_AND_NORMAL) {
             // one waypoint per material the chunk holds, so every kind the tooltip lists gets its own marker
             List<Map.Entry<Short, Integer>> entries = chunkEntries(hoverX, hoverZ);
@@ -374,10 +371,10 @@ public class ScanMapWidget extends Widget<ScanMapWidget> implements Interactable
             String[] names = new String[entries.size()];
             int[] colors = new int[entries.size()];
             for (int i = 0; i < entries.size(); i++) {
-                OreDictMaterial mat = OreDictMaterial.MATERIAL_ARRAY[entries.get(i)
-                    .getKey()];
-                names[i] = ScanViewState.materialName(mat);
-                colors[i] = ScanViewState.rawColor(mat);
+                short id = entries.get(i)
+                    .getKey();
+                names[i] = state.entryName(id);
+                colors[i] = state.entryColor(id);
             }
             JourneyMapBridge.expectWaypoints(names, colors);
         } else {
@@ -386,11 +383,11 @@ public class ScanMapWidget extends Widget<ScanMapWidget> implements Interactable
         CommonProxy.simpleNetworkWrapper.sendToServer(new SurfaceRequest(worldX, worldZ, false));
     }
 
-    /** Name of a bedrock mode waypoint: "bedrock ore (X)" / "fluid bedrock (X)" with the material of the chunk. */
-    private String bedrockWaypointName(ScanMode mode, OreDictMaterial mat) {
+    /** Name of a bedrock mode waypoint: "bedrock ore (X)" / "fluid bedrock (X)" with the material or fluid of the chunk. */
+    private String bedrockWaypointName(ScanMode mode, short id) {
         return String.format(LH.get("gt6scan.waypoint.name"),
             LH.get(mode == ScanMode.BEDROCK ? "gt6scan.waypoint.bedrock_ore" : "gt6scan.waypoint.fluid_bedrock"),
-            ScanViewState.materialName(mat));
+            state.entryName(id));
     }
 
     /**
@@ -410,21 +407,20 @@ public class ScanMapWidget extends Widget<ScanMapWidget> implements Interactable
         return entries;
     }
 
-    /** Material of the clicked cell, or the most common one of its chunk when the cell itself is empty. */
-    private OreDictMaterial chunkMaterial(int gridX, int gridZ) {
-        short matID = state.matAt(gridX, gridZ);
-        if (matID == 0) {
-            Map<Short, Integer> counts = state.chunkCountsAt(gridX, gridZ);
-            int best = 0;
-            if (counts != null) {
-                for (Map.Entry<Short, Integer> entry : counts.entrySet()) {
-                    if (entry.getValue() > best) {
-                        best = entry.getValue();
-                        matID = entry.getKey();
-                    }
+    /** Scanned entry of the clicked cell (a material or a fluid), or the most common one of its chunk when empty. */
+    private short chunkEntry(int gridX, int gridZ) {
+        short id = state.shownMatAt(gridX, gridZ);
+        if (id != 0) return id;
+        Map<Short, Integer> counts = state.chunkCountsAt(gridX, gridZ);
+        int best = 0;
+        if (counts != null) {
+            for (Map.Entry<Short, Integer> entry : counts.entrySet()) {
+                if (entry.getValue() > best) {
+                    best = entry.getValue();
+                    id = entry.getKey();
                 }
             }
         }
-        return matID == 0 ? null : OreDictMaterial.MATERIAL_ARRAY[matID];
+        return id;
     }
 }

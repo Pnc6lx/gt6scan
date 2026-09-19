@@ -24,10 +24,17 @@ public class MaterialIcon implements IDrawable {
 
     private final ItemStack item;
     private final FluidStack fluid;
+    /** Drawn when neither the item nor the fluid can be shown: the entry's colour, or 0 for the neutral marker. */
+    private final int fallbackColour;
 
     public MaterialIcon(ItemStack item, FluidStack fluid) {
+        this(item, fluid, 0);
+    }
+
+    public MaterialIcon(ItemStack item, FluidStack fluid, int fallbackColour) {
         this.item = item;
         this.fluid = fluid;
+        this.fallbackColour = fallbackColour;
     }
 
     @Override
@@ -40,6 +47,9 @@ public class MaterialIcon implements IDrawable {
             GuiDraw.drawRect(x + width - 1, y, 1, height, EDGE);
         } else if (this.item != null) {
             GuiDraw.drawItem(this.item, x, y, width, height, 0);
+        } else if (this.fallbackColour != 0) {
+            // no texture for that fluid: a solid block of the colour the entry is drawn with everywhere else
+            GuiDraw.drawRect(x, y, width, height, this.fallbackColour);
         } else {
             // nothing known for this material: neutral marker instead of a broken/missing texture
             GuiDraw.drawRect(x, y, width, height, UNKNOWN);
