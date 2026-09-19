@@ -35,10 +35,9 @@ import cpw.mods.fml.common.network.simpleimpl.MessageContext;
 import cpw.mods.fml.relauncher.Side;
 import cpw.mods.fml.relauncher.SideOnly;
 import gregapi.data.LH;
-import gregapi.oredict.OreDictMaterial;
 
 @SideOnly(Side.CLIENT)
-public class HandlerClient implements IMessageHandler<ScanResponse, IMessage>, IGuiHolder {
+public class HandlerClient implements IMessageHandler<ScanDoneResponse, IMessage>, IGuiHolder {
     /** Padding around the map and the material list. */
     private static final int PAD = 6;
     /** Row reserved above the map for the hover/status line. */
@@ -54,20 +53,38 @@ public class HandlerClient implements IMessageHandler<ScanResponse, IMessage>, I
 
     private ScanViewState state;
 
+    /** FML instantiates the handler of the done message itself, the map is opened through {@link #open}. */
+    public HandlerClient() {}
+
+    private HandlerClient(ScanViewState view) {
+        this.state = view;
+    }
+
     @Override
-    public IMessage onMessage(ScanResponse message, MessageContext ctx) {
+    public IMessage onMessage(ScanDoneResponse message, MessageContext ctx) {
         if (ctx.side != Side.CLIENT) return null;
 
-        Minecraft minecraft = Minecraft.getMinecraft();
+        // the map was opened with the begin message and has been filling in since; the last chunk only has to bring
+        // the ore list up to its final block counts
+        ScanViewState view = ScanResultBuffer.current();
+        if (view != null) view.markFinished();
+        return null;
+    }
 
-        state = new ScanViewState(message.x, message.z, message.mode, message.chunkSize, message.teleportAllowed,
-            message.topMat, message.counts, message.chunkCounts);
-        state.recompute();
+    /**
+     * Opens the map of a scan that is being streamed to this client. Called as soon as the begin message arrives, so
+     * the result is drawn while the chunks are still coming in; the chunks themselves only recolour their own part.
+     */
+    public static void open(ScanViewState view) {
+        if (view == null) return;
+        Minecraft minecraft = Minecraft.getMinecraft();
+        HandlerClient holder = new HandlerClient(view);
         GuiData data = new GuiData(minecraft.thePlayer);
         UISettings settings = new UISettings();
-        ModularPanel panel = buildUI(data, new PanelSyncManager(new ModularSyncManager(true), true), settings);
-        ClientGUI.open(createScreen(data, panel), settings);
-        return null;
+        ModularPanel panel = holder.buildUI(data, new PanelSyncManager(new ModularSyncManager(true), true), settings);
+        // the centre marker is not part of any chunk, so the colour grid is set up once here
+        view.recompute();
+        ClientGUI.open(holder.createScreen(data, panel), settings);
     }
 
     @Override
@@ -79,14 +96,15 @@ public class HandlerClient implements IMessageHandler<ScanResponse, IMessage>, I
         final int mapPx = view.mapPx;
         final List<Map.Entry<Short, Integer>> entries = view.sortedTotals();
 
-        // Material column is as wide as its longest entry (DetravScannerGUI sizes its list the same way).
+        // Material column is as wide as its longest entry (DetravScannerGUI sizes its list the same way). While the
+        // scan is still running materials keep appearing, so the column is reserved at its widest until the last
+        // chunk arrived - a longer label showing up later must not run over the panel.
         int longest = MIN_LIST_W;
         for (Map.Entry<Short, Integer> entry : entries) {
-            String label = ScanViewState.materialName(OreDictMaterial.MATERIAL_ARRAY[entry.getKey()])
-                + ": " + entry.getValue();
+            String label = view.entryName(entry.getKey()) + ": " + entry.getValue();
             longest = Math.max(longest, font.getStringWidth(label) + FilterRowWidget.ROW_H + 34);
         }
-        final int listW = Math.min(longest, MAX_LIST_W);
+        final int listW = view.isFinished() ? Math.min(longest, MAX_LIST_W) : MAX_LIST_W;
 
         // The map is drawn 1:1 unless it does not fit, in which case it is scaled down. It must never overlap
         // the list nor leave the panel/screen.
@@ -140,17 +158,10 @@ public class HandlerClient implements IMessageHandler<ScanResponse, IMessage>, I
         clearButton.tooltipAutoUpdate(true)
             .tooltipBuilder(tooltip -> tooltip.addLine(LH.get("gt6scan.gui.filter_hint")));
 
-        mainPanel.child(
-            new ListWidget<>().scrollDirection(new VerticalScrollData())
-                .collapseDisabledChild()
-                .pos(listX, listY)
-                .size(listW, listH)
-                .children(entries.size(), i -> {
-                    Map.Entry<Short, Integer> entry = entries.get(i);
-                    FilterRowWidget row = new FilterRowWidget(view, entry.getKey(), entry.getValue(), listW);
-                    row.setEnabledIf(r -> r.matches(search.getStringValue()));
-                    return row;
-                }));
+        mainPanel.child(new OreListWidget(view, listW, search).scrollDirection(new VerticalScrollData())
+            .collapseDisabledChild()
+            .pos(listX, listY)
+            .size(listW, listH));
 
         mainPanel.child(new ScanMapWidget(view, player, mapArea, STATUS_H).pos(mapX, mapY)
             .size(mapArea, mapArea));
@@ -170,5 +181,43 @@ public class HandlerClient implements IMessageHandler<ScanResponse, IMessage>, I
     @Override
     public ModularPanel buildUI(GuiData guiData, PanelSyncManager syncManager, UISettings settings) {
         return ModularPanel.defaultPanel("Scanner");
+    }
+
+    /**
+     * The ore list next to the map. The map is opened before the scan is done, so materials keep appearing while it
+     * runs: the rows are rebuilt whenever {@link ScanViewState#revision()} changed, which happens when a material
+     * shows up that was not listed yet and once more when the last chunk arrived (then with the final counts). The
+     * filter selection and the search text are kept, only the scroll position is reset when the list grows.
+     */
+    private static final class OreListWidget extends ListWidget<IWidget, OreListWidget> {
+
+        private final ScanViewState view;
+        private final int listW;
+        private final StringValue search;
+        private int builtRevision = -1;
+
+        OreListWidget(ScanViewState view, int listW, StringValue search) {
+            this.view = view;
+            this.listW = listW;
+            this.search = search;
+        }
+
+        @Override
+        public void onUpdate() {
+            if (builtRevision != view.revision()) {
+                builtRevision = view.revision();
+                rebuild();
+            }
+            super.onUpdate();
+        }
+
+        private void rebuild() {
+            removeAll();
+            for (Map.Entry<Short, Integer> entry : view.sortedTotals()) {
+                FilterRowWidget row = new FilterRowWidget(view, entry.getKey(), entry.getValue(), listW);
+                row.setEnabledIf(r -> r.matches(search.getStringValue()));
+                child(row);
+            }
+        }
     }
 }

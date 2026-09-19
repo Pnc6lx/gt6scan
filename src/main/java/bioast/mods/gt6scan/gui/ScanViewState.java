@@ -8,12 +8,16 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import gregapi.data.FL;
 import gregapi.data.LH;
 import gregapi.data.MT;
 import gregapi.oredict.OreDictMaterial;
 import gregapi.util.UT;
+import net.minecraftforge.fluids.Fluid;
+import net.minecraftforge.fluids.FluidStack;
 
 import bioast.mods.gt6scan.network.ScanMode;
+import bioast.mods.gt6scan.network.scanmessage.ScanChunkResponse;
 import cpw.mods.fml.relauncher.Side;
 import cpw.mods.fml.relauncher.SideOnly;
 
@@ -50,8 +54,20 @@ public class ScanViewState {
     private final Set<Short> selection = new LinkedHashSet<>();
     private boolean inverted;
 
-    public ScanViewState(int x, int z, int modeOrdinal, int chunkSize, boolean teleportAllowed, short[] topMat,
-        Map<Short, Integer> counts, Map<Integer, Integer> rawChunkCounts) {
+    /**
+     * Materials of every column that holds more than one, highest first, key = {@code gridX * mapPx + gridZ}.
+     * Single material columns are not stored: their material is already in {@link #mats}. It is a sparse map on
+     * purpose, most columns of a scan hold nothing or one material and a dense array of column lists would cost
+     * several megabytes on a big range.
+     */
+    private final Map<Integer, short[]> columnMats = new HashMap<>();
+    /** Changes whenever the ore list has to be rebuilt: a material appeared or the scan finished. */
+    private int revision;
+    /** Set by {@link #markFinished()}: the server sent the last chunk of this scan. */
+    private boolean finished;
+
+    @SuppressWarnings("unchecked")
+    public ScanViewState(int x, int z, int modeOrdinal, int chunkSize, boolean teleportAllowed) {
         this.originX = x;
         this.originZ = z;
         this.chunkSize = chunkSize;
@@ -59,26 +75,49 @@ public class ScanViewState {
         this.mode = ScanMode.values()[modeOrdinal];
         this.teleportAllowed = teleportAllowed;
         this.mats = new short[this.mapPx][this.mapPx];
-        if (topMat != null && topMat.length == this.mapPx * this.mapPx) {
-            for (int gridX = 0; gridX < this.mapPx; gridX++) {
-                for (int gridZ = 0; gridZ < this.mapPx; gridZ++) {
-                    this.mats[gridX][gridZ] = topMat[gridX * this.mapPx + gridZ];
-                }
-            }
-        }
-        this.totals = counts == null ? new HashMap<>() : counts;
-        this.chunkCounts = new Map[chunkSize * chunkSize];
-        if (rawChunkCounts != null) {
-            for (Map.Entry<Integer, Integer> entry : rawChunkCounts.entrySet()) {
-                int index = entry.getKey() >>> 16;
-                int matID = entry.getKey() & 0xFFFF;
-                if (index < 0 || index >= this.chunkCounts.length) continue;
-                Map<Short, Integer> map = this.chunkCounts[index];
-                if (map == null) this.chunkCounts[index] = map = new HashMap<>();
-                map.put((short) matID, entry.getValue());
-            }
-        }
         this.colors = new int[this.mapPx][this.mapPx];
+        this.totals = new HashMap<>();
+        this.chunkCounts = new Map[chunkSize * chunkSize];
+    }
+
+    /**
+     * Adds the result of one scanned chunk where it belongs in the grid and recolours exactly that part of the map,
+     * so a map that the client opened on the begin message fills in chunk by chunk while the scan is still running.
+     *
+     * @param chunkIndex position of the chunk in the scan grid, {@code (gridX >> 4) * chunkSize + (gridZ >> 4)}
+     * @param cells      topmost material per column of that chunk, {@code localX * 16 + localZ}, 0 = none
+     * @param counts     block count per material inside that chunk
+     * @param columns    materials of the columns holding more than one; {@code null} entries are single material
+     *                   columns, the whole array may be null
+     */
+    public void applyChunk(int chunkIndex, short[] cells, Map<Short, Integer> counts, short[][] columns) {
+        if (chunkIndex < 0 || chunkIndex >= chunkCounts.length) return;
+        int gridX = (chunkIndex / chunkSize) * CELL;
+        int gridZ = (chunkIndex % chunkSize) * CELL;
+        if (gridX + CELL > mapPx || gridZ + CELL > mapPx) return;
+
+        for (int k = 0; k < CELL; k++) {
+            for (int l = 0; l < CELL; l++) {
+                // every id on the wire is looked up in OreDictMaterial.MATERIAL_ARRAY on this side, so anything
+                // that would not survive that lookup is dropped right where it enters the map
+                short matID = cells == null ? 0 : cells[k * CELL + l];
+                mats[gridX + k][gridZ + l] = ScanChunkResponse.isValidId(mode, matID) ? matID : 0;
+                if (columns != null && columns[k * CELL + l] != null) {
+                    columnMats.put((gridX + k) * mapPx + gridZ + l, columns[k * CELL + l]);
+                }
+                recolor(gridX + k, gridZ + l);
+            }
+        }
+        if (counts == null) return;
+        for (Map.Entry<Short, Integer> entry : counts.entrySet()) {
+            short matID = entry.getKey();
+            if (!ScanChunkResponse.isValidId(mode, matID)) continue;
+            if (!totals.containsKey(matID)) revision++;
+            totals.merge(matID, entry.getValue(), Integer::sum);
+            Map<Short, Integer> perChunk = chunkCounts[chunkIndex];
+            if (perChunk == null) chunkCounts[chunkIndex] = perChunk = new HashMap<>();
+            perChunk.merge(matID, entry.getValue(), Integer::sum);
+        }
     }
 
     public ScanMode mode() {
@@ -137,13 +176,22 @@ public class ScanViewState {
     }
 
     /** Name search only hides list rows, it never filters the map on its own. Matches the localised name (so
-     * Chinese input works) and the internal English name, so either language finds the material. */
-    public boolean matchesSearch(OreDictMaterial mat, String query) {
+     * Chinese input works) and the internal English name, so either language finds the entry - for a fluid in the
+     * fluid modes that is the fluid's localised name and its registry name. */
+    public boolean matchesSearch(short id, String query) {
         if (query == null || query.isEmpty()) return true;
         String q = query.toLowerCase();
-        return materialName(mat).toLowerCase()
+        if (mode.isFluid()) {
+            Fluid fluid = FL.fluid(id);
+            return fluid != null && (fluidName(fluid).toLowerCase()
+                .contains(q) || fluid.getName()
+                    .toLowerCase()
+                    .contains(q));
+        }
+        OreDictMaterial mat = OreDictMaterial.MATERIAL_ARRAY[id];
+        return mat != null && (materialName(mat).toLowerCase()
             .contains(q) || mat.mNameInternal.toLowerCase()
-                .contains(q);
+                .contains(q));
     }
 
     // ---- map data -----------------------------------------------------------------------------------------------
@@ -190,14 +238,85 @@ public class ScanViewState {
     public void recompute() {
         for (int gridX = 0; gridX < mapPx; gridX++) {
             for (int gridZ = 0; gridZ < mapPx; gridZ++) {
-                short matID = mats[gridX][gridZ];
-                colors[gridX][gridZ] = matID != 0 && isVisible(matID)
-                    ? rawColor(OreDictMaterial.MATERIAL_ARRAY[matID])
-                    : EMPTY;
+                recolor(gridX, gridZ);
             }
         }
         int center = ((chunkSize - 1) / 2) * CELL + 7;
         colors[center][center] = 0xFFE03030;
+    }
+
+    /** Colours one cell with whatever {@link #shownMatAt} reports for it: a material or, in the fluid modes, a fluid. */
+    private void recolor(int gridX, int gridZ) {
+        short matID = shownMatAt(gridX, gridZ);
+        colors[gridX][gridZ] = matID != 0 ? entryColor(matID) : EMPTY;
+    }
+
+    /**
+     * Name of a scanned entry: the material's name, or the fluid's name in the fluid modes. The fluid modes need this
+     * because GT6's heavy, light, medium and extra heavy oil are separate fluids without a material - they all share
+     * the material "Oil", so only the fluid can tell them apart in the list and the tooltips.
+     */
+    public String entryName(short id) {
+        if (!mode.isFluid()) return materialName(OreDictMaterial.MATERIAL_ARRAY[id]);
+        Fluid fluid = FL.fluid(id);
+        return fluid == null ? LH.get("gt6scan.gui.nan") : fluidName(fluid);
+    }
+
+    /** Map colour of a scanned entry: the material's solid colour, or the fluid's colour - see {@link FluidColour}. */
+    public int entryColor(short id) {
+        if (!mode.isFluid()) return rawColor(OreDictMaterial.MATERIAL_ARRAY[id]);
+        return FluidColour.of(FL.fluid(id));
+    }
+
+    /** {@link #entryColor} adjusted so the label stays readable on the current panel background. */
+    public int entryListColor(short id) {
+        return listColor(entryColor(id));
+    }
+
+    /** Localised name of a fluid, with the vanilla fallback for fluids that only have an unlocalised name. */
+    private static String fluidName(Fluid fluid) {
+        String name = fluid.getLocalizedName(new FluidStack(fluid, 1));
+        if (name != null && !name.isEmpty() && !name.equals(fluid.getUnlocalizedName())) return name;
+        String key = "fluid." + fluid.getUnlocalizedName();
+        String translated = LH.get(key);
+        return translated.equals(key) ? name : translated;
+    }
+
+    /**
+     * The material a cell shows. Without a filter that is the topmost material of the column. With a filter it is the
+     * highest <em>selected</em> material of that column: a column holding material a on top and b and c below shows b
+     * when b and c are filtered (and c when only c is), and it stays empty when none of the selected materials occurs
+     * in it at all. So a vein another ore covers up can be found, and the cell still answers "which of the materials
+     * I am looking for is closest to the surface here".
+     */
+    public short shownMatAt(int gridX, int gridZ) {
+        short top = mats[gridX][gridZ];
+        if (top == 0 || selection.isEmpty() || selection.contains(top)) return top;
+        short[] column = columnMats.get(gridX * mapPx + gridZ);
+        if (column == null) return 0;
+        // the list is stored highest first, so the first selected material is the highest one that was selected
+        for (short matID : column) if (selection.contains(matID)) return matID;
+        return 0;
+    }
+
+    /**
+     * Counter for the ore list: it changes when a material appears that was not in the list yet, and once more
+     * when the scan is done. The list widget rebuilds its rows when it sees a new value, so the list next to a
+     * still running map grows with it instead of being rebuilt on every chunk.
+     */
+    public int revision() {
+        return revision;
+    }
+
+    /** Called with the last chunk: the list is rebuilt once more, now with the final block counts. */
+    public void markFinished() {
+        finished = true;
+        revision++;
+    }
+
+    /** Whether the server already sent the last chunk of this scan. */
+    public boolean isFinished() {
+        return finished;
     }
 
     // ---- colours and names --------------------------------------------------------------------------------------
@@ -223,7 +342,11 @@ public class ScanViewState {
      * which used to make the entry invisible.
      */
     public int listColor(OreDictMaterial mat) {
-        int argb = rawColor(mat);
+        return listColor(rawColor(mat));
+    }
+
+    /** Same adjustment for an already resolved colour, used by the fluid modes where the colour comes from the fluid. */
+    public int listColor(int argb) {
         int luma = luma(argb);
         int target = -1;
         float mix = 0f;
