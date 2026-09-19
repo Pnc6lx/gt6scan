@@ -33,16 +33,29 @@
  *
  * For more details, see https://docs.gradle.org/8.0.1/userguide/java_library_plugin.html#sec:java_library_configurations_graph
  */
+
+// 本地可选：客户端中文/日文/韩文输入需要 InputFix（zlainsama/InputFix，MMPL 1.0.1）或 lwjgl3ify。
+// 它只是可选的运行时前置，不是编译依赖，所以本仓库不提交、发布包里也不包含任何 InputFix 二进制
+// （来源与许可见 THIRD-PARTY-NOTICES.md）。本地开发要测中文输入时，把自己构建的 jar 放进 libs/，
+// 下面依赖块里的判断会自动启用它；文件不存在时构建照常进行。
+def localInputFix = file("libs/InputFix-1.7.10-v6.jar")
+
 dependencies {
+    // ModularUI2 2.3.88+（GTNH Maven，替代本地 libs jar）
+    api("com.github.GTNewHorizons:ModularUI2:2.3.88-1.7.10:dev")
+    // MUI2 自身仅 compileOnlyApi 引用 lwjgl3ify，不传递；编译若缺类则取消下行注释
+    // compileOnlyApi('com.github.GTNewHorizons:lwjgl3ify:3.0.25:api') { transitive = false }
+    // GT6 官方 dev jar（mechaenetia maven，HTTPS）
+    api("com.gregoriust.gregtech:gregtech_1.7.10:6.17.06:dev")
+    // GT6 的方块类层次引用了 AE2 API（appeng.api.movable.IMovableTile），编译期需要
     compileOnly 'appeng:appliedenergistics2:rv3-beta-6:dev'
-//    api 'com.github.GTNewHorizons:ModularUI2:2.0.9-1.7.10:dev'
-    api fileTree('libs/modularui2-2.2.2-1.7.10-dev.jar')
-    api 'com.github.GTNewHorizons:GTNHLib:0.2.4:dev'
-    api 'com.gregoriust.gregtech:gregtech_1.7.10:6.16.02:dev'
-    api("com.github.GTNewHorizons:NotEnoughItems:2.5.4-GTNH:dev")
-    api 'com.github.GTNewHorizons:CodeChickenCore:1.1.11:dev'
+    api 'com.github.GTNewHorizons:GTNHLib:0.11.19:dev'
+    api("com.github.GTNewHorizons:NotEnoughItems:2.8.105-GTNH:dev")
+    api 'com.github.GTNewHorizons:CodeChickenCore:1.4.15:dev'
     api 'curse.maven:journeymap-32274:4500659'
-//    compileOnly(deobfCurse('xaeros-minimap-263420:4905582'))
-//    compileOnly(deobfCurse('xaeros-world-map-317780:4905612'))
-//    compileOnly(deobf('https://media.forgecdn.net/files/2462/146/mod_voxelMap_1.7.0b_for_1.7.10.litemod', 'mod_voxelMap_1.7.0b_for_1.7.10.jar'))
+    if (localInputFix.exists()) {
+        // 让 1.7.10 的键盘事件携带输入法合成的字符（ImeBridge 依赖的正是这些字符事件）；
+        // 仅开发环境使用，不随 mod 发布，也不进版本库
+        devOnlyNonPublishable(rfg.deobf(project.files(localInputFix)))
+    }
 }

@@ -20,3 +20,20 @@ To use this mod you have to install [ModularUI2](https://github.com/GTNewHorizon
 ![image](https://media.discordapp.net/attachments/1144419196487356416/1145781511782670356/image.png?width=822&height=430)
 ![image](https://media.discordapp.net/attachments/1144419196487356416/1144419197028401313/image.png?width=1287&height=662)
 ![image](https://media.discordapp.net/attachments/1144419196487356416/1144419197594652722/image.png?width=677&height=642)
+
+## Client requirements
+
+Chinese/Japanese/Korean input in the scanner search box needs the client to deliver
+IME composed characters. On plain 1.7.10 that requires
+[InputFix](https://github.com/zlainsama/inputfix) (or lwjgl3ify) on the client:
+ModularUI2 only forwards those character events through `KeyboardInputEvent`, it does
+not produce them itself. Without either mod everything else works as usual, only the
+IME input stays unavailable, and a warning is written to the log at startup.
+InputFix is an optional client mod - it is neither bundled here nor shipped with the
+mod jar, install it yourself if you need it.
+
+## License
+
+MIT, see [LICENSE](LICENSE). The libraries this mod links against keep their own
+licenses (LGPL-3.0 for GregTech 6 / ModularUI2 / GTNHLib, LGPL-2.1 for JourneyMap);
+see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).

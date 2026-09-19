@@ -37,3 +37,5 @@ addon.late.local.gradle
 addon.late.local.gradle.kts
 /.jdk/
 /layout.json
+# 第三方 jar 不入库（例如本地自行构建的可选 InputFix；来源与许可见 THIRD-PARTY-NOTICES.md）
+/libs/*.jar

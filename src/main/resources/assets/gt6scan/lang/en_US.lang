@@ -1,0 +1,54 @@
+# Items (registered via MultiItemRandom.addItem)
+scannertool.2=Medium Voltage Scanner (MV)
+scannertool.2.tooltip=Scan For Ores, Fluids and Rocks (when in Gui you can click on any tile and bookmark it)
+scannertool.3=High Voltage Scanner (HV)
+scannertool.3.tooltip=Scan For Ores, Fluids and Rocks (when in Gui you can click on any tile and bookmark it)
+scannertool.4=Extreme Voltage Scanner (EV)
+scannertool.4.tooltip=Scan For Ores, Fluids and Rocks (when in Gui you can click on any tile and bookmark it)
+scannertool.5=Insane Voltage Scanner (IV)
+scannertool.5.tooltip=Scan For Ores, Fluids and Rocks (when in Gui you can click on any tile and bookmark it)
+
+# Tooltips
+gt6scan.tooltip.open_gui=Right Click to Open the Mode GUI.
+gt6scan.tooltip.mode_suffix=Mode.
+gt6scan.tooltip.size=Range: %s chunks
+
+# Chat
+gt6scan.chat.broadcast=%1$s %2$s chunk (x %3$d - %4$d, z %5$d - %6$d): %7$s
+gt6scan.chat.no_energy=Not Enough Energy for a Scan!
+gt6scan.chat.out_of_reach=That position is out of the scanned range!
+gt6scan.chat.no_surface=There is no block to stand on at that position!
+gt6scan.chat.no_journeymap=JourneyMap is not installed, cannot create a waypoint.
+gt6scan.chat.no_nei=NotEnoughItems is not installed, cannot add a bookmark.
+gt6scan.chat.bookmark_exists=That item is already bookmarked, nothing was added.
+gt6scan.chat.no_bookmark_item=That material has no item form to bookmark.
+gt6scan.chat.waypoint_exists=That chunk already has the same marker, nothing was created.
+gt6scan.chat.login_notice=To Use the ScannerMod For GT6, You Must have ModularUI2 on your client.
+gt6scan.chat.scanning=Scanning...
+gt6scan.chat.cancelled=Cancelled The Previous Scan.
+
+# GUI
+gt6scan.gui.natural_gas=Natural Gas
+gt6scan.gui.nan=NaN
+gt6scan.gui.status=%s , %s , %s. Dim: %s. Mode: %s
+gt6scan.gui.select_mode=Select Scan Mode
+gt6scan.gui.range=Range: %1$s chunks (%2$s blocks)
+gt6scan.gui.teleport_hint=Press T to teleport to this position
+gt6scan.gui.waypoint_hint=Press B to create a JourneyMap waypoint
+gt6scan.gui.hover_hint=Left click: bookmark this item/fluid in NEI, right click: broadcast
+gt6scan.waypoint.bedrock_ore=bedrock ore
+gt6scan.waypoint.fluid_bedrock=fluid bedrock
+gt6scan.waypoint.name=%1$s (%2$s)
+gt6scan.gui.mode_hint=Click a mode to start the scan. The map opens when it finishes.
+gt6scan.gui.scanning=Scanning %s...
+
+# Scan Modes
+gt6scan.mode.none=None
+gt6scan.mode.large=Large Ores
+gt6scan.mode.small=Small Ores
+gt6scan.mode.dense_and_normal=Dense and Normal Ores
+gt6scan.mode.bedrock=Bedrock Ores
+gt6scan.mode.fluid_bedrock=Bedrock Fluids
+gt6scan.mode.rock=Rocks
+gt6scan.mode.fluid=Fluids
+gt6scan.mode.oredict=Other Mods' Ores

@@ -1,0 +1,23 @@
+THIRD PARTY NOTICES
+===================
+
+The code of this mod is MIT licensed, see LICENSE in this jar and in the repository.
+
+This jar does not contain any third party library code. The libraries this mod links
+against keep their own licenses and are installed separately by the user:
+
+  GregTech 6 (gregapi)                 LGPL-3.0   http://gregtech.mechaenetia.com/
+  ModularUI2                           LGPL-3.0   https://github.com/GTNewHorizons/ModularUI2
+  JourneyMap 1.7.10                    LGPL-2.1   https://github.com/TeamJM/journeymap
+  GTNHLib                              LGPL-3.0   https://github.com/GTNewHorizons/GTNHLib
+  NotEnoughItems / CodeChickenCore     see upstream
+                                                  https://github.com/GTNewHorizons/NotEnoughItems
+                                                  https://github.com/GTNewHorizons/CodeChickenCore
+
+Optional client mod, not included here:
+
+  InputFix (lain.mods.inputfix)        Minecraft Mod Public License 1.0.1
+                                                  https://github.com/zlainsama/InputFix
+
+InputFix or lwjgl3ify is needed on the client for Chinese/Japanese/Korean input in
+the search box; without it the mod works normally and only IME input is unavailable.

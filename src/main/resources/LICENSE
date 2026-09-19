@@ -1,6 +1,13 @@
 MIT License
 
-Copyright (c) [year] [fullname]
+Copyright (c) 2021 Johann Bernhardt (original gt6scan)
+Copyright (c) 2026 Pnc6lx (modifications, https://github.com/Pnc6lx/gt6scan)
+
+This mod's own code is MIT licensed. The libraries it links against keep their own
+licenses and are listed, together with their copyright holders, in
+THIRD-PARTY-NOTICES.txt which ships next to this file: GregTech 6 and ModularUI2 are
+LGPL-3.0, JourneyMap is LGPL-2.1, GTNHLib is LGPL-3.0. None of them is bundled into
+this jar; they are regular mod dependencies that the user installs separately.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

@@ -9,16 +9,12 @@ public class ScanRequest implements IMessage {
     int x, z;
     int chunkSize;
 
+    /** The range is the config value of the scanner tier, see {@code ScannerMultiTool.rangeOf(int)}. */
     public ScanRequest(ScanMode mode, int x, int z, int chunkSize) {
-        this(mode, x, z);
-        this.chunkSize = chunkSize;
-    }
-
-    public ScanRequest(ScanMode mode, int x, int z) {
         this.mode = mode.ordinal();
         this.x = x;
         this.z = z;
-        chunkSize = 9;
+        this.chunkSize = chunkSize;
     }
 
     public ScanRequest() {
