@@ -22,7 +22,7 @@ import static bioast.mods.gt6scan.ScannerMod.*;
 
 @Mod(modid = MODID, version = VERSION, name = MODNAME, dependencies = DEPENDENCIES)
 public class ScannerMod extends Abstract_Mod {
-    public static final String DEPENDENCIES = "after:modularui@[2.2.2,);required-after:gregapi";
+    public static final String DEPENDENCIES = "required-after:modularui2@[2.3.88,);required-after:gregapi";
     public static final String MODID = "GRADLETOKEN_MODID";
     public static final String MODNAME = "GRADLETOKEN_MODNAME";
     public static final String VERSION = "GRADLETOKEN_VERSION";
@@ -32,6 +32,11 @@ public class ScannerMod extends Abstract_Mod {
     public static gregapi.code.ModData MOD_DATA = new gregapi.code.ModData(MODID, MODNAME);
     public static ScannerMod instance;
     public static Config config;
+    /**
+     * Config gate for the T teleport on the scan map. It is only one of two conditions: the world has to allow
+     * cheats as well (see {@code WorldInfo.areCommandsAllowed()}), and both are checked server side.
+     */
+    public static boolean allowTeleport = true;
     @SidedProxy(clientSide = "bioast.mods.gt6scan.proxy.ClientProxy", serverSide = "bioast.mods.gt6scan.proxy.CommonProxy")
     public static CommonProxy proxy;
     public static ScannerMultiTool tool;
@@ -61,6 +66,18 @@ public class ScannerMod extends Abstract_Mod {
         instance = this;
         proxy.preInit(aEvent);
         config = new Config(CS.DirectoriesGT.CONFIG_GT, "scanner.cfg");
+        // scan ranges are config driven (one entry per tier, plus the bound all of them are clamped to), so the item
+        // tooltip, the mode GUI and the scan itself always report and use the same value
+        // note: config keys must not contain '=', Forge splits each line on the first one
+        ScannerMultiTool.maxRange = config.get("scan_range",
+            "max_range (Def:64) hard upper bound for every scan range, in chunks (one chunk is 16 blocks)",
+            64);
+        for (int tier = ScannerMultiTool.MIN_TIER; tier <= ScannerMultiTool.MAX_TIER; tier++) {
+            ScannerMultiTool.setRange(tier, config.get("scan_range",
+                String.format("range_tier_%d (Def:%d) scan range of the %s Scanner, in chunks",
+                    tier, ScannerMultiTool.defaultRange(tier), CS.VOLTAGE_NAMES[tier]),
+                ScannerMultiTool.defaultRange(tier)));
+        }
         String eu = config.get("core",
             "ToolConsumptionEnergy Def:EU, Poss: STEAM, MJ, RF, AU, QU, MU, LU, HU, CU, KU, RU, EU, NU, TU, (put any invalid item to make it consume no energy)",
             "EU");
@@ -72,6 +89,9 @@ public class ScannerMod extends Abstract_Mod {
         ScannerMultiTool.consumptionRate = config.get("core",
             "consumptionRate (def:50) 50 * voltage for each usage of the scanner",
             50);
+        allowTeleport = config.get("core",
+            "allow_teleport (Def:true) allow the T teleport on the scan map, the world must also allow cheats",
+            true);
     }
 
     @Override

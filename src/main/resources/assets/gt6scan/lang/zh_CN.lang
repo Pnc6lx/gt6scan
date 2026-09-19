@@ -1,0 +1,64 @@
+# 物品（通过 MultiItemRandom.addItem 注册）
+scannertool.2=MV探矿仪
+scannertool.2.tooltip=扫描矿石、流体与岩石（在界面中可点击任意方块并添加书签）
+scannertool.3=HV探矿仪
+scannertool.3.tooltip=扫描矿石、流体与岩石（在界面中可点击任意方块并添加书签）
+scannertool.4=EV探矿仪
+scannertool.4.tooltip=扫描矿石、流体与岩石（在界面中可点击任意方块并添加书签）
+scannertool.5=IV探矿仪
+scannertool.5.tooltip=扫描矿石、流体与岩石（在界面中可点击任意方块并添加书签）
+
+# 物品提示
+gt6scan.tooltip.open_gui=右键打开模式选择界面。
+gt6scan.tooltip.mode_suffix=模式。
+gt6scan.tooltip.size=扫描范围: %s 区块
+
+# 聊天消息
+gt6scan.chat.broadcast=%1$s %2$s 区块（x %3$d - %4$d, z %5$d - %6$d）：%7$s
+gt6scan.chat.no_energy=能量不足，无法扫描！
+gt6scan.chat.out_of_reach=该位置超出扫描范围！
+gt6scan.chat.no_surface=该位置没有可以站立的方块！
+gt6scan.chat.no_journeymap=未安装 JourneyMap，无法创建路径点。
+gt6scan.chat.waypoint_exists=该区块已经有相同的标记了，未重复创建。
+gt6scan.chat.login_notice=要使用 GT6 的扫描仪模组，你的客户端必须安装 ModularUI2。
+gt6scan.chat.scanning=正在扫描...
+gt6scan.chat.cancelled=已取消上一次扫描。
+
+# 界面
+gt6scan.gui.natural_gas=天然气
+gt6scan.gui.nan=无
+gt6scan.gui.status=%s , %s , %s. 维度: %s. 模式: %s
+gt6scan.gui.search=搜索名称…
+gt6scan.gui.teleport_hint=按T传送到该位置
+gt6scan.waypoint.bedrock_ore=基岩矿物
+gt6scan.waypoint.fluid_bedrock=基岩泉
+gt6scan.waypoint.name=%1$s （%2$s）
+gt6scan.gui.select_mode=选择扫描模式
+gt6scan.gui.range=扫描范围: %1$s 区块（%2$s 格）
+gt6scan.gui.mode_hint=点击一个模式开始扫描，完成后自动打开地图。
+gt6scan.gui.scanning=正在扫描 %s…
+gt6scan.gui.invert_off=反色
+gt6scan.gui.invert_on=反色中
+gt6scan.gui.invert_hint=反色整个界面与地图配色。
+gt6scan.gui.clear_filter=清除筛选
+gt6scan.gui.clear_filter_n=清除筛选 (%d)
+gt6scan.gui.filter_hint=勾选右侧条目后，地图只显示被勾选的材料。
+gt6scan.gui.filter_count=已勾选 %d 项
+gt6scan.gui.row_selected=已勾选：地图上会显示
+gt6scan.gui.row_unselected=未勾选
+gt6scan.gui.row_hint=左键点击切换该材料的显示。
+gt6scan.gui.cell_info=该格
+gt6scan.gui.chunk_info=所在区块
+gt6scan.gui.chunk_empty=该区块内没有可显示的矿物
+gt6scan.gui.hover_hint=左键收藏，右键播报
+
+# 扫描模式
+gt6scan.mode.none=关闭
+gt6scan.mode.large=矿脉
+gt6scan.mode.small=贫瘠矿
+gt6scan.mode.dense_and_normal=密集与普通矿
+gt6scan.mode.bedrock=基岩矿物
+gt6scan.mode.fluid_bedrock=基岩泉
+gt6scan.mode.rock=岩石
+gt6scan.mode.fluid=流体
+gt6scan.mode.oredict=其他模组矿石
