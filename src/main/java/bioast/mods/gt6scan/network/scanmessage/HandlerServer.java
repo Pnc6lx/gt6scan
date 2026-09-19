@@ -1,5 +1,6 @@
 package bioast.mods.gt6scan.network.scanmessage;
 
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -12,6 +13,8 @@ import net.minecraft.tileentity.TileEntity;
 import net.minecraft.world.ChunkPosition;
 import net.minecraft.world.World;
 import net.minecraft.world.chunk.Chunk;
+import net.minecraftforge.fluids.Fluid;
+import net.minecraftforge.fluids.FluidRegistry;
 import net.minecraftforge.fluids.FluidStack;
 import net.minecraftforge.fluids.IFluidBlock;
 
@@ -23,6 +26,7 @@ import bioast.mods.gt6scan.item.ScannerMultiTool;
 import bioast.mods.gt6scan.network.ScanMode;
 import bioast.mods.gt6scan.proxy.CommonProxy;
 import bioast.mods.gt6scan.utils.ScanScheduler;
+import cpw.mods.fml.common.network.simpleimpl.IMessage;
 import cpw.mods.fml.common.network.simpleimpl.IMessageHandler;
 import cpw.mods.fml.common.network.simpleimpl.MessageContext;
 import cpw.mods.fml.relauncher.Side;
@@ -51,16 +55,25 @@ import static bioast.mods.gt6scan.utils.HLPs.prefixBlock;
 
 /**
  * The scan itself is no longer executed in one go (which stalled the server thread and, on big ranges, produced a
- * response larger than the ~2MB packet limit). Instead, like the detrav prospector, the work is spread over server
- * ticks by {@link ScanScheduler} and the response only carries the column grid + per material counts.
+ * response larger than the ~2MB packet limit of {@code S3FPacketCustomPayload} - the server then closed the
+ * connection and the client reported a lost connection). Instead the work is spread over server ticks by
+ * {@link ScanScheduler} and the result is <em>streamed</em>, one chunk at a time:
+ * <ul>
+ * <li>{@link ScanBeginResponse} sets up the result grid on the client,</li>
+ * <li>every scanned chunk immediately follows as its own {@link ScanChunkResponse} (a few hundred bytes),</li>
+ * <li>{@link ScanDoneResponse} tells the client that it has everything and may open the map.</li>
+ * </ul>
+ * Chunks are also loaded lazily, one per scanned chunk, instead of loading the whole range up front. One tick never
+ * has to do more than one chunk, so a scan of other mods' ores (ore dictionary mode: every block of every column of
+ * the range) can neither stall the server nor flood the connection anymore.
  */
-public class HandlerServer implements IMessageHandler<ScanRequest, ScanResponse> {
+public class HandlerServer implements IMessageHandler<ScanRequest, IMessage> {
     /** Pending job per player, so a new scan cancels the previous one, exactly like detrav's prospector. */
     private static final Map<EntityPlayerMP, ScanJob> PENDING = new MapMaker().weakKeys()
         .makeMap();
 
     @Override
-    public ScanResponse onMessage(ScanRequest message, MessageContext ctx) {
+    public IMessage onMessage(ScanRequest message, MessageContext ctx) {
         if (ctx.side != Side.SERVER) return null;
         EntityPlayerMP player = ctx.getServerHandler().playerEntity;
         if (message.mode < 0 || message.mode >= ScanMode.values().length) return null;
@@ -73,6 +86,8 @@ public class HandlerServer implements IMessageHandler<ScanRequest, ScanResponse>
         if (held == null || held.getItem() != ScannerMod.tool) return null;
         int tier = held.getItemDamage();
         if (tier < 2 || tier > 5) return null;
+        // the scan is paid for up front, before the job starts and therefore before the client opens the map: the
+        // client never gets a map it did not pay for, and a scan cancelled halfway is not refunded
         if (!tryConsumeEnergy(player, held, tier)) {
             UT.Entities.sendchat(player, Chat.RED + LH.get("gt6scan.chat.no_energy") + Chat.GRAY);
             return null;
@@ -85,19 +100,16 @@ public class HandlerServer implements IMessageHandler<ScanRequest, ScanResponse>
         int chunkSize = Math.max(1, Math.min(message.chunkSize, ScannerMultiTool.rangeOf(tier)));
         World world = player.getEntityWorld();
 
-        // chunk loading has to happen before the job starts, like detrav does it
-        Chunk[][] chunks = getChunksAroundLoc(world, message.x, message.z, chunkSize);
-
         ScanJob old = PENDING.remove(player);
         if (old != null && ScanScheduler.cancel(old)) {
             UT.Entities.sendchat(player, Chat.YELLOW + LH.get("gt6scan.chat.cancelled") + Chat.GRAY);
         }
         UT.Entities.sendchat(player, Chat.YELLOW + LH.get("gt6scan.chat.scanning") + Chat.GRAY);
 
-        ScanJob job = new ScanJob(mode, message.mode, world, chunks, chunkSize, player);
+        ScanJob job = new ScanJob(mode, message.mode, world, message.x, message.z, chunkSize, player);
         PENDING.put(player, job);
         ScanScheduler.submit(job);
-        return null; // the response is sent once the scan finished
+        return null; // the response is sent chunk by chunk while the job runs
     }
 
     /**
@@ -120,108 +132,246 @@ public class HandlerServer implements IMessageHandler<ScanRequest, ScanResponse>
             true);
     }
 
-    /** One scan, spread over several server ticks. Collects only what the GUI needs. */
+    /**
+     * One scan, spread over several server ticks and sent out chunk by chunk. It only ever holds the data of the
+     * chunk it is currently scanning (three small reused buffers), the client accumulates the rest.
+     */
     private static final class ScanJob implements ScanScheduler.Job {
         private final ScanMode mode;
         private final int modeOrdinal;
         private final World world;
-        private final Chunk[][] chunks;
         private final int chunkSize;
-        private final int mapPx;
-        private final int xOrigin, zOrigin;
         private final EntityPlayerMP player;
-        /** Same layout as the response grid: index = gridX * mapPx + gridZ. */
-        private final short[] topMat;
-        /** y of the entry in {@link #topMat}, so the topmost ore per column wins. */
-        private final int[] topY;
-        private final HashMap<Short, Integer> counts = new HashMap<>();
-        /** Per chunk block count, key = (chunkIndex << 16) | (matID & 0xFFFF), used by the chunk hover tooltip. */
-        private final HashMap<Integer, Integer> chunkCounts = new HashMap<>();
+        /** Corner chunk of the scan grid; the grid is not exactly centred for even sizes, like detrav's prospector. */
+        private final int baseChunkX, baseChunkZ;
+        private final int xOrigin, zOrigin;
+        /**
+         * Whether the map may offer the T teleport for this scan: the world has to allow cheats and the config must
+         * not have turned it off (checked here so a modified client cannot bypass it).
+         */
+        private final boolean teleportAllowed;
+        /** Topmost ore per column of the chunk being scanned, index = {@code localX * 16 + localZ}. */
+        private final short[] cells = new short[ScanChunkResponse.CELLS];
+        /** y of the entry in {@link #cells}, so the topmost ore per column wins. */
+        private final int[] cellY = new int[ScanChunkResponse.CELLS];
+        /** Block count per material of the chunk being scanned - a dense vein contributes every one of its blocks. */
+        private final HashMap<Short, Integer> chunkCount = new HashMap<>();
+        /**
+         * Materials seen in each column of the chunk being scanned, {@link #columnCount} says how many of the
+         * {@link ScanChunkResponse#MAX_COLUMN_MATS} slots belong to a column (index = {@code localX * 16 + localZ}).
+         * The client needs this to find a material that another ore sits on top of; only the columns holding more
+         * than one material are put on the wire.
+         */
+        private final short[] columnMats = new short[ScanChunkResponse.CELLS * ScanChunkResponse.MAX_COLUMN_MATS];
+        /** y of the entry at the same position in {@link #columnMats}, so the materials can be sent highest first. */
+        private final short[] columnY = new short[ScanChunkResponse.CELLS * ScanChunkResponse.MAX_COLUMN_MATS];
+        private final byte[] columnCount = new byte[ScanChunkResponse.CELLS];
         /**
          * Cache of {@link #oreDictOreID}, key = (block id << 16) | (meta & 0xFFFF). One ore dictionary lookup per
          * block type instead of one per block - the same stone or ore block is hit thousands of times per scan.
          */
         private final HashMap<Integer, Short> oreDictCache = new HashMap<>();
+        private final int totalChunks;
+        /** Chunk indices of the grid in scan order, the chunks around the player first - see {@link #scanOrder}. */
+        private final int[] order;
         private int nextChunk = 0;
+        private boolean began = false;
 
-        ScanJob(ScanMode mode, int modeOrdinal, World world, Chunk[][] chunks, int chunkSize, EntityPlayerMP player) {
+        ScanJob(ScanMode mode, int modeOrdinal, World world, int posX, int posZ, int chunkSize,
+            EntityPlayerMP player) {
             this.mode = mode;
             this.modeOrdinal = modeOrdinal;
             this.world = world;
-            this.chunks = chunks;
             this.chunkSize = chunkSize;
             this.player = player;
-            this.mapPx = chunkSize * 16;
-            this.xOrigin = chunks[0][0].xPosition << 4;
-            this.zOrigin = chunks[0][0].zPosition << 4;
-            this.topMat = new short[mapPx * mapPx];
-            this.topY = new int[mapPx * mapPx];
+            this.totalChunks = chunkSize * chunkSize;
+            int half = (chunkSize - 1) / 2;
+            this.baseChunkX = (posX >> 4) - half;
+            this.baseChunkZ = (posZ >> 4) - half;
+            this.xOrigin = baseChunkX << 4;
+            this.zOrigin = baseChunkZ << 4;
+            this.teleportAllowed = ScannerMod.allowTeleport && world.getWorldInfo()
+                .areCommandsAllowed();
+            this.order = scanOrder(posX >> 4, posZ >> 4);
+        }
+
+        /**
+         * The chunks of the grid in the order they are scanned: outward from the chunk the player stands in (Chebyshev
+         * distance, so a square around the player grows evenly). The scan takes just as long as before, but the area
+         * the player is looking at appears first instead of the top left corner of the range. A chunk keeps its own
+         * grid index, only the visit order changes, and the client places every chunk by that index - it does not
+         * care in which order they arrive.
+         */
+        private int[] scanOrder(int playerChunkX, int playerChunkZ) {
+            int px = Math.max(0, Math.min(chunkSize - 1, playerChunkX - baseChunkX));
+            int pz = Math.max(0, Math.min(chunkSize - 1, playerChunkZ - baseChunkZ));
+            int[] result = new int[totalChunks];
+            for (int i = 0; i < chunkSize; i++) {
+                for (int j = 0; j < chunkSize; j++) {
+                    int distance = Math.max(Math.abs(i - px), Math.abs(j - pz));
+                    // packed as distance * totalChunks + gridIndex, so sorting puts the nearest chunk first
+                    result[i * chunkSize + j] = distance * totalChunks + i * chunkSize + j;
+                }
+            }
+            Arrays.sort(result);
+            return result;
         }
 
         @Override
         public boolean run(long deadline) {
-            while (nextChunk < chunkSize * chunkSize) {
-                scanChunk(chunks[nextChunk / chunkSize][nextChunk % chunkSize]);
-                nextChunk++;
-                if (System.nanoTime() >= deadline) return false;
+            if (!began) {
+                began = true;
+                if (!sendBegin()) {
+                    finish();
+                    return true;
+                }
             }
-            sendResponse();
+            boolean didWork = false;
+            while (nextChunk < totalChunks) {
+                // one chunk is the smallest unit of work (loading it may generate terrain), so the budget is checked
+                // between chunks only - and at least one chunk per tick is always done, or the scan could stall
+                if (didWork && System.nanoTime() >= deadline) return false;
+                if (!isPlayerValid()) {
+                    finish();
+                    return true;
+                }
+                scanAndSendChunk(order[nextChunk] % totalChunks);
+                nextChunk++;
+                didWork = true;
+            }
+            sendDone();
             return true;
         }
 
         /**
-         * Records every block that {@link #scanBlocks} / {@link #scanTileEntities} reports, for every layer it
-         * appears in. The per-material {@link #counts} and per-chunk {@link #chunkCounts} are full-layer totals -
-         * a dense ore vein that fills a column contributes every one of its blocks. The map only needs the
-         * topmost ore per column and is filled in here too.
+         * Loads and scans exactly one chunk of the range and sends its result. Chunks are loaded here, one per
+         * scanned chunk, instead of loading the whole range before the job starts: a big range no longer blocks the
+         * server thread while it loads (or even generates) hundreds of chunks inside a single tick.
          */
-        private void record(int x, int y, int z, short matID) {
-            int gridX = x - xOrigin, gridZ = z - zOrigin;
-            if (gridX < 0 || gridZ < 0 || gridX >= mapPx || gridZ >= mapPx) return;
-            int index = gridX * mapPx + gridZ;
-            if (topMat[index] == 0 || y > topY[index]) {
-                topMat[index] = matID;
-                topY[index] = y;
-            }
-            Integer count = counts.get(matID);
-            counts.put(matID, count == null ? 1 : count + 1);
-            int key = (((gridX >> 4) * chunkSize + (gridZ >> 4)) << 16) | (matID & 0xFFFF);
-            Integer chunkCount = chunkCounts.get(key);
-            chunkCounts.put(key, chunkCount == null ? 1 : chunkCount + 1);
-        }
-
-        private void scanChunk(Chunk chunk) {
+        private void scanAndSendChunk(int chunkIndex) {
+            int i = chunkIndex / chunkSize, j = chunkIndex % chunkSize;
+            Chunk chunk = world.getChunkFromChunkCoords(baseChunkX + i, baseChunkZ + j);
+            if (chunk == null) return; // nothing to scan, those columns simply stay empty on the client
+            Arrays.fill(cells, (short) 0);
+            Arrays.fill(cellY, 0);
+            Arrays.fill(columnCount, (byte) 0);
+            chunkCount.clear();
             if (mode.isTE()) scanTileEntities(chunk);
             else scanBlocks(chunk);
+            // the buffers are reused for the next chunk, so the message gets its own copy of them. Only the columns
+            // holding more than one material are added, a single material column is already in the topmost grid.
+            ScanChunkResponse response = new ScanChunkResponse(chunkIndex, cells.clone(), new HashMap<>(chunkCount));
+            for (int k = 0; k < ScanChunkResponse.CELLS; k++) {
+                int count = columnCount[k];
+                if (count < 2) continue;
+                response.columns[k] = columnTopFirst(k, count);
+            }
+            CommonProxy.simpleNetworkWrapper.sendTo(response, player);
         }
 
         /**
-         * Scans one chunk block by block. Every block-scanning ore mode runs through the whole column without
-         * breaking, so the counters are real full-layer totals - a dense ore vein that fills a column adds every one
-         * of its blocks, not just the topmost one. The map only needs the topmost material per column, which
-         * {@link #record} picks up while still counting every block.
+         * Records every block that {@link #scanBlocks} / {@link #scanTileEntities} reports, for every layer it
+         * appears in. The per-material {@link #chunkCount} is a full-layer total - a dense ore vein that fills a
+         * column contributes every one of its blocks - while the map only keeps the topmost ore per column.
+         *
+         * @param localX x inside the chunk, 0..15
+         * @param localZ z inside the chunk, 0..15
+         */
+        private void record(int localX, int y, int localZ, short matID) {
+            if (localX < 0 || localZ < 0 || localX >= 16 || localZ >= 16) return;
+            // only ids the client can resolve may go onto the wire: a material id in the block modes and a fluid id
+            // in the fluid modes. A prefix block tile entity whose metadata was never initialised reports W (-1).
+            if (!ScanChunkResponse.isValidId(mode, matID)) return;
+            int index = localX * 16 + localZ;
+            if (cells[index] == 0 || y > cellY[index]) {
+                cells[index] = matID;
+                cellY[index] = y;
+            }
+            chunkCount.merge(matID, 1, Integer::sum);
+            addColumnMaterial(index, matID, y);
+        }
+
+        /**
+         * Remembers that a material occurs in a column and how high it was found there: the client colours a cell the
+         * player filtered for with the highest <em>selected</em> material of that column, so the depth order has to
+         * travel with the data (see {@link #columnTopFirst}). A material found several times keeps its highest y, and
+         * a column holding more different ores than {@link ScanChunkResponse#MAX_COLUMN_MATS} drops its deepest one
+         * in favour of a higher one.
+         */
+        private void addColumnMaterial(int index, short matID, int y) {
+            int base = index * ScanChunkResponse.MAX_COLUMN_MATS;
+            int count = columnCount[index];
+            int deepest = 0;
+            for (int i = 0; i < count; i++) {
+                if (columnMats[base + i] == matID) {
+                    if (y > columnY[base + i]) columnY[base + i] = (short) y;
+                    return;
+                }
+                if (columnY[base + i] < columnY[base + deepest]) deepest = i;
+            }
+            if (count < ScanChunkResponse.MAX_COLUMN_MATS) {
+                columnMats[base + count] = matID;
+                columnY[base + count] = (short) y;
+                columnCount[index] = (byte) (count + 1);
+                return;
+            }
+            if (y > columnY[base + deepest]) {
+                columnMats[base + deepest] = matID;
+                columnY[base + deepest] = (short) y;
+            }
+        }
+
+        /** Materials of one column, the highest one first - the order tells the client which one to draw. */
+        private short[] columnTopFirst(int index, int count) {
+            int base = index * ScanChunkResponse.MAX_COLUMN_MATS;
+            short[] mats = new short[count];
+            short[] ys = new short[count];
+            for (int i = 0; i < count; i++) {
+                mats[i] = columnMats[base + i];
+                ys[i] = columnY[base + i];
+            }
+            // insertion sort by y, at most MAX_COLUMN_MATS entries, so this is a handful of moves
+            for (int i = 1; i < count; i++) {
+                short mat = mats[i], y = ys[i];
+                int j = i - 1;
+                while (j >= 0 && ys[j] < y) {
+                    mats[j + 1] = mats[j];
+                    ys[j + 1] = ys[j];
+                    j--;
+                }
+                mats[j + 1] = mat;
+                ys[j + 1] = y;
+            }
+            return mats;
+        }
+
+        /**
+         * Scans one chunk block by block, every mode through the whole column down to y = 0: the counters are real
+         * full-layer totals, a vein that fills a column adds every one of its blocks and not just the topmost one.
+         * The map itself only needs the topmost entry per column, which {@link #record} picks up while counting the
+         * rest.
          * <p>
-         * Fluid modes ({@link ScanMode#FLUID}) intentionally stop at the first fluid layer of each column - an ocean
-         * column would otherwise add ~60 water blocks per column and drown the interesting totals. Tile-entity based
-         * ore modes ({@link ScanMode#LARGE}, {@link ScanMode#SMALL}, {@link ScanMode#BEDROCK}, {@link ScanMode#ROCK},
+         * The fluid mode runs the column down as well. It used to stop at the first water layer of a column, which
+         * made everything under an ocean invisible - an oil seep under the sea floor was never scanned at all. Now it
+         * is counted, and because every column keeps the list of what it holds (see {@link #columnMats}) the filter
+         * finds it even though the water above is what the unfiltered map draws. Tile-entity based ore modes
+         * ({@link ScanMode#LARGE}, {@link ScanMode#SMALL}, {@link ScanMode#BEDROCK}, {@link ScanMode#ROCK},
          * {@link ScanMode#FLUID_BEDROCK}) are handled by {@link #scanTileEntities} and are full-layer by construction
-         * because every placed ore block is its own tile entity.
+         * because every placed block is its own tile entity.
          */
         private void scanBlocks(Chunk chunk) {
             for (int k = 0; k < 16; k++) {
                 for (int l = 0; l < 16; l++) {
                     int highestY = chunk.getHeightValue(k, l);
-                    int x = chunk.xPosition * 16 + k;
-                    int z = chunk.zPosition * 16 + l;
                     for (int y = highestY; y >= 0; y--) {
                         Block block = chunk.getBlock(k, y, l);
                         int meta = chunk.getBlockMetadata(k, y, l);
                         short matID = oreIDForMode(block, meta);
                         if (matID != 0) {
-                            record(x, y, z, matID);
+                            record(k, y, l, matID);
                             continue;
                         }
-                        if (mode == ScanMode.FLUID && scanFluidBlock(block, x, y, z)) break;
+                        if (mode == ScanMode.FLUID) scanFluidBlock(block, k, y, l);
                     }
                 }
             }
@@ -293,74 +443,82 @@ public class HandlerServer implements IMessageHandler<ScanRequest, ScanResponse>
         }
 
         /**
-         * Records the fluid block of this column if it is one we recognise, and reports whether the scan should
-         * stop at this layer (the FLUID mode always stops at the first fluid block, the FLUID_BEDROCK mode is
-         * tile-entity based and handled elsewhere).
+         * Records the fluid of this block if the FLUID mode reports it. The scan keeps going down the column after
+         * this (see {@link #scanBlocks}), so a fluid underneath another one - oil below the water of an ocean - is
+         * found as well instead of being hidden by the water above it.
+         * <p>
+         * The id that goes onto the wire is the <em>fluid</em> id, not a material id: GT6's heavy, light and medium
+         * oil (and the extra heavy one) are separate fluids without a material of their own, so a material id could
+         * not tell them apart - the fluid carries the name the player wants to see ("Heavy Oil", "Raw Oil", ...).
          */
-        private boolean scanFluidBlock(Block block, int x, int y, int z) {
+        private void scanFluidBlock(Block block, int localX, int y, int localZ) {
             if (block == Blocks.lava) {
-                record(x, y, z, MT.Lava.mID);
-                if (world.provider.isHellWorld) return true;
+                record(localX, y, localZ, fluidID(FluidRegistry.LAVA));
+                return;
             }
-            if (!(block instanceof IFluidBlock) && block != Blocks.water) return false;
-            if (!(block instanceof IFluidBlock fluid)) return true;
-            String fluidName = fluid.getFluid()
-                .getName();
-            short matID = MT.Air.mID;
-            if (fluidName.contains("natural")) matID = MT.MethaneIce.mID;
-            else if (fluidName.contains("oil")) matID = MT.Oil.mID;
-            else if (fluidName.contains("honey")) matID = MT.Honey.mID;
-            else if (fluidName.contains("sulfuric")) matID = MT.H2SO4.mID;
-            else if (fluidName.contains("acid")) matID = MT.H2SO4.mID;
-            else if (fluidName.contains("poison")) matID = MT.DirtyWater.mID;
-            else if (fluidName.contains("infused")) matID = MT.InfusedWater.mID;
-            else if (fluidName.contains("mana")) matID = MT.Magic.mID;
-            if (block == CS.BlocksGT.WaterGeothermal) matID = MT.DistWater.mID;
-            if (fluidName.contains("water")) {
-                // the special "water" variants (geothermal/oil/...) were handled above; plain water is recorded and
-                // the column stops here - everything below is still water
-                if (matID == MT.Air.mID) record(x, y, z, MT.Water.mID);
-                return true;
+            if (!(block instanceof IFluidBlock) && block != Blocks.water) return;
+            if (!(block instanceof IFluidBlock fluidBlock)) {
+                record(localX, y, localZ, fluidID(FluidRegistry.WATER)); // plain water, the only fluid without a block
+                return;
             }
-            if (matID != MT.Air.mID) record(x, y, z, matID);
-            return false;
+            Fluid fluid = fluidBlock.getFluid();
+            String fluidName = fluid.getName();
+            // water always counts (every water variant reports its own fluid), everything else only when it is one of
+            // the fluids this mode is about - without that every modded fluid would end up in the list
+            if (block == CS.BlocksGT.WaterGeothermal || fluidName.contains("water") || isInterestingFluid(fluidName)) {
+                record(localX, y, localZ, fluidID(fluid));
+            }
         }
 
+        /** The fluid kinds the FLUID mode reports; without this the map would fill up with every modded fluid. */
+        private static boolean isInterestingFluid(String fluidName) {
+            return fluidName.contains("oil") || fluidName.contains("natural") || fluidName.contains("honey")
+                || fluidName.contains("sulfuric") || fluidName.contains("acid") || fluidName.contains("poison")
+                || fluidName.contains("infused") || fluidName.contains("mana");
+        }
+
+        /**
+         * Fluid id of a fluid, the id the client resolves back to it (name, colour, icon). GT6's oils are distinct
+         * fluids without a material of their own, so the fluid is what identifies a fluid scan result.
+         */
+        private static short fluidID(Fluid fluid) {
+            return fluid == null ? 0 : (short) fluid.getID();
+        }
+
+        /**
+         * Scans the tile entities of one chunk. Every placed ore block of the GT6 prefix block system is its own
+         * tile entity, so counting them is a full-layer total by construction. The tile coordinates are turned into
+         * chunk local ones, because the result of a chunk is sent as a 16x16 grid of its own.
+         */
         private void scanTileEntities(Chunk chunk) {
             var tMap = chunk.chunkTileEntityMap;
             if (tMap == null) return;
+            final int chunkX = chunk.xPosition * 16, chunkZ = chunk.zPosition * 16;
             try {
                 ((Map<ChunkPosition, TileEntity>) (tMap)).forEach((chunkPos, tile) -> {
-                    if (tile instanceof PrefixBlockTileEntity pTile && (mode == ScanMode.LARGE || mode == ScanMode.SMALL
-                        || mode == ScanMode.BEDROCK)) {
+                    if (tile instanceof PrefixBlockTileEntity pTile
+                        && (mode == ScanMode.LARGE || mode == ScanMode.SMALL || mode == ScanMode.BEDROCK)) {
                         PrefixBlock pBlock = prefixBlock(pTile);
                         boolean isBedrock = false;
                         if (mode == ScanMode.BEDROCK) {
                             isBedrock = pBlock.mNameInternal.contains("bedrock");
                         }
                         if (isBedrock || pBlock.mPrefix.mFamiliarPrefixes.contains(mode.PREFIX)) {
-                            record(pTile.getX(), pTile.getY(), pTile.getZ(), pTile.mMetaData);
+                            record(pTile.getX() - chunkX, pTile.getY(), pTile.getZ() - chunkZ, pTile.mMetaData);
                         }
                     }
                     if (mode == ScanMode.FLUID_BEDROCK && tile instanceof MultiTileEntityFluidSpring) {
+                        // the spring keeps its fluid in the NBT (gt.spring -> fluidname), GT6 reads it back into
+                        // mFluid. The fluid's own id is recorded, so heavy, light and medium oil stay apart in the
+                        // GUI instead of all being shown as "Oil".
                         FluidStack fluidStack = ((MultiTileEntityFluidSpring) tile).mFluid;
                         if (fluidStack == null || fluidStack.getFluid() == null) return;
-                        String name = fluidStack.getFluid()
-                            .getName();
-                        short matID = 0;
-                        if (name.contains("oil")) matID = MT.Oil.mID;
-                        if (name.contains("water")) matID = MT.Water.mID;
-                        if (name.contains("lava")) matID = MT.Lava.mID;
-                        // MethaneIce is what the client displays as "natural gas" (lang key gt6scan.gui.natural_gas),
-                        // CH4 would show up as "methane" instead
-                        if (name.contains("natural")) matID = MT.MethaneIce.mID;
-                        if (matID != 0) {
-                            record(tile.xCoord, tile.yCoord, tile.zCoord, matID);
-                        }
+                        record(tile.xCoord - chunkX, tile.yCoord, tile.zCoord - chunkZ,
+                            fluidID(fluidStack.getFluid()));
                     }
                     if (tile instanceof MultiTileEntityRock && mode == ScanMode.ROCK) {
                         short matID = OM.anydata_(((MultiTileEntityRock) tile).mRock).mMaterial.mMaterial.mID;
-                        record(tile.xCoord, tile.yCoord, tile.zCoord, matID);
+                        record(tile.xCoord - chunkX, tile.yCoord, tile.zCoord - chunkZ, matID);
                     }
                 });
             } catch (Exception e) {
@@ -368,34 +526,31 @@ public class HandlerServer implements IMessageHandler<ScanRequest, ScanResponse>
             }
         }
 
-        private void sendResponse() {
-            PENDING.remove(player, this);
-            if (player.playerNetServerHandler == null || player.playerNetServerHandler.netManager == null) return; // player left
-            // the client only shows/uses the T teleport when the server says it may: the world must allow cheats
-            // and the config must not have turned it off (checked here so a modified client cannot bypass it)
-            boolean teleportAllowed = ScannerMod.allowTeleport && world.getWorldInfo()
-                .areCommandsAllowed();
+        /** Tells the client the grid it has to set up; without it the per chunk messages could not be placed. */
+        private boolean sendBegin() {
+            if (!isPlayerValid()) return false;
             CommonProxy.simpleNetworkWrapper.sendTo(
-                new ScanResponse(xOrigin, zOrigin, modeOrdinal, chunkSize, teleportAllowed, topMat, counts,
-                    chunkCounts),
+                new ScanBeginResponse(xOrigin, zOrigin, modeOrdinal, chunkSize, teleportAllowed),
                 player);
+            return true;
         }
-    }
 
-    public static Chunk[][] getChunksAroundLoc(World aWorld, int posX, int posZ, int chunkSize) {
-        Chunk[][] chunks = new Chunk[chunkSize][chunkSize];
-        final int CENTER_CHUNK_INDEX = (chunkSize - 1) / 2;
-        chunks[CENTER_CHUNK_INDEX][CENTER_CHUNK_INDEX] = aWorld.getChunkFromBlockCoords(posX, posZ);
-        final Chunk PLAYER_CHUNK = chunks[CENTER_CHUNK_INDEX][CENTER_CHUNK_INDEX];
-        chunks[0][0] = aWorld.getChunkFromChunkCoords(PLAYER_CHUNK.xPosition - ((chunkSize - 1) / 2),
-                PLAYER_CHUNK.zPosition - ((chunkSize - 1) / 2));
-        for (int i = 0; i < chunkSize; i++) {
-            for (int j = 0; j < chunkSize; j++) {
-                if (i == 0 && j == 0) continue;
-                if (i == CENTER_CHUNK_INDEX && j == CENTER_CHUNK_INDEX) continue;
-                chunks[i][j] = aWorld.getChunkFromChunkCoords(chunks[0][0].xPosition + i, chunks[0][0].zPosition + j);
-            }
+        /** Last message of the scan: everything is on the client, it may open the map now. */
+        private void sendDone() {
+            finish();
+            if (!isPlayerValid()) return;
+            CommonProxy.simpleNetworkWrapper.sendTo(new ScanDoneResponse(), player);
         }
-        return chunks;
+
+        private void finish() {
+            PENDING.remove(player, this);
+        }
+
+        /** The scan is dropped as soon as the player is gone or left the world it was started in. */
+        private boolean isPlayerValid() {
+            return player.playerNetServerHandler != null && player.playerNetServerHandler.netManager != null
+                && !player.isDead
+                && player.worldObj == world;
+        }
     }
 }
