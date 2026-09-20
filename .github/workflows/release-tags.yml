@@ -1,4 +1,3 @@
-
 name: Release tagged build
 
 on:
@@ -8,7 +7,41 @@ on:
 permissions:
   contents: write
 
+# Own release job instead of the GTNH shared one: that one only offers JDK 8/17/21, while this build needs
+# JVM 25 (gtnhsettingsconvention 2.0.29 is compiled for it - Gradle refuses the plugin on an older JVM, which
+# made the shared workflow die in "Setup the workspace" and skipped the release). Everything else is intended
+# to behave like the shared workflow: jars from build/libs are attached to the release of the pushed tag.
 jobs:
-  release-tags:
-    uses: GTNewHorizons/GTNH-Actions-Workflows/.github/workflows/release-tags.yml@master
-    secrets: inherit
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout mod repo
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 32
+          submodules: recursive
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x ./gradlew
+
+      - name: Setup the workspace and build
+        run: ./gradlew --build-cache setupCIWorkspace build -x test
+
+      - name: Release under current tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" ./build/libs/*.jar --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes ./build/libs/*.jar
+          fi
