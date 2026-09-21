@@ -51,7 +51,10 @@ public final class ScanScheduler {
             try {
                 if (it.next()
                     .run(deadline)) it.remove();
-            } catch (Exception e) {
+            } catch (Throwable e) {
+                // also an Error: a missing or renamed class of a dependency (an incompatible GregTech build, for
+                // example) would otherwise escape this scheduler and only show up as an event bus error every tick,
+                // with the job never finishing and the client waiting for a map that never arrives
                 it.remove();
                 ScannerMod.debug.error("Failed to run scan job", e);
             }

@@ -1,7 +1,9 @@
 package bioast.mods.gt6scan.network.scanmessage;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import net.minecraft.block.Block;
@@ -176,6 +178,8 @@ public class HandlerServer implements IMessageHandler<ScanRequest, IMessage> {
         private final int[] order;
         private int nextChunk = 0;
         private boolean began = false;
+        /** The map warning is logged once per scan, not once per chunk. */
+        private boolean warnedAboutTileEntityMap = false;
 
         ScanJob(ScanMode mode, int modeOrdinal, World world, int posX, int posZ, int chunkSize,
             EntityPlayerMP player) {
@@ -489,41 +493,118 @@ public class HandlerServer implements IMessageHandler<ScanRequest, IMessage> {
          * Scans the tile entities of one chunk. Every placed ore block of the GT6 prefix block system is its own
          * tile entity, so counting them is a full-layer total by construction. The tile coordinates are turned into
          * chunk local ones, because the result of a chunk is sent as a 16x16 grid of its own.
+         * <p>
+         * The map is read through {@link Map#values()} and deliberately <em>not</em> through {@link Map#forEach}:
+         * a mod that replaces the chunk tile entity map may return a subclass that delegates every {@code Map}
+         * method to another map and so inherits {@code HashMap.forEach}, which iterates the internal table of the
+         * never used {@code HashMap} superclass - the loop body then never runs and every tile entity mode silently
+         * reports an empty map. {@code values()} is part of the {@code Map} contract, so it stays correct with and
+         * without such a mod (Angelica installs a {@code ConcurrentTileEntityMap} exactly like that).
+         * <p>
+         * Every tile entity gets its own try/catch as well: one broken tile entity must not throw away the rest of
+         * the chunk, and an {@code Error} (an incompatible GregTech build, for example) is caught too instead of
+         * killing the whole scan job without a single line in the log.
          */
         private void scanTileEntities(Chunk chunk) {
             var tMap = chunk.chunkTileEntityMap;
             if (tMap == null) return;
+            final Map<ChunkPosition, TileEntity> map = (Map<ChunkPosition, TileEntity>) tMap;
             final int chunkX = chunk.xPosition * 16, chunkZ = chunk.zPosition * 16;
+            List<TileEntity> tiles;
             try {
-                ((Map<ChunkPosition, TileEntity>) (tMap)).forEach((chunkPos, tile) -> {
-                    if (tile instanceof PrefixBlockTileEntity pTile
-                        && (mode == ScanMode.LARGE || mode == ScanMode.SMALL || mode == ScanMode.BEDROCK)) {
-                        PrefixBlock pBlock = prefixBlock(pTile);
-                        boolean isBedrock = false;
-                        if (mode == ScanMode.BEDROCK) {
-                            isBedrock = pBlock.mNameInternal.contains("bedrock");
-                        }
-                        if (isBedrock || pBlock.mPrefix.mFamiliarPrefixes.contains(mode.PREFIX)) {
-                            record(pTile.getX() - chunkX, pTile.getY(), pTile.getZ() - chunkZ, pTile.mMetaData);
-                        }
-                    }
-                    if (mode == ScanMode.FLUID_BEDROCK && tile instanceof MultiTileEntityFluidSpring) {
-                        // the spring keeps its fluid in the NBT (gt.spring -> fluidname), GT6 reads it back into
-                        // mFluid. The fluid's own id is recorded, so heavy, light and medium oil stay apart in the
-                        // GUI instead of all being shown as "Oil".
-                        FluidStack fluidStack = ((MultiTileEntityFluidSpring) tile).mFluid;
-                        if (fluidStack == null || fluidStack.getFluid() == null) return;
-                        record(tile.xCoord - chunkX, tile.yCoord, tile.zCoord - chunkZ,
-                            fluidID(fluidStack.getFluid()));
-                    }
-                    if (tile instanceof MultiTileEntityRock && mode == ScanMode.ROCK) {
-                        short matID = OM.anydata_(((MultiTileEntityRock) tile).mRock).mMaterial.mMaterial.mID;
-                        record(tile.xCoord - chunkX, tile.yCoord, tile.zCoord - chunkZ, matID);
-                    }
-                });
-            } catch (Exception e) {
-                e.printStackTrace();
+                // a snapshot, so a map that defers its removals to the running iteration cannot break the loop
+                tiles = new ArrayList<>(map.values());
+            } catch (Throwable t) {
+                ScannerMod.debug.error("Failed to read the tile entities of the chunk " + chunk.xPosition + " "
+                    + chunk.zPosition, t);
+                return;
             }
+            if (tiles.isEmpty() && map.size() > 0 && !warnedAboutTileEntityMap) {
+                warnedAboutTileEntityMap = true;
+                // without this line the symptom of a broken map implementation is a map that stays empty for no
+                // visible reason, so tell the player's log what is going on instead of reporting "nothing found"
+                ScannerMod.debug.warn("The chunk tile entity map reports " + map.size()
+                    + " entries but iterating it returned none (a mod replaced the map implementation, Angelica does)"
+                    + " - the tile entity scan modes cannot find anything like this");
+            }
+            for (TileEntity tile : tiles) {
+                if (tile == null) continue;
+                try {
+                    scanTileEntity(tile, chunkX, chunkZ);
+                } catch (Throwable t) {
+                    ScannerMod.debug.error("Skipping the tile entity " + tile.getClass()
+                        .getName() + " at " + tile.xCoord + " " + tile.yCoord + " " + tile.zCoord, t);
+                }
+            }
+        }
+
+        /**
+         * Records what the current mode reports for one tile entity, if anything.
+         * <p>
+         * Each mode has its own method: a mode then only ever loads and verifies the GregTech classes it really
+         * needs, so a GregTech build whose rock or fluid spring class moved or vanished can only break the one mode
+         * that uses it instead of every tile entity mode at once.
+         */
+        private void scanTileEntity(TileEntity tile, int chunkX, int chunkZ) {
+            switch (mode) {
+                case FLUID_BEDROCK -> scanFluidSpring(tile, chunkX, chunkZ);
+                case ROCK -> scanRock(tile, chunkX, chunkZ);
+                case LARGE, SMALL, BEDROCK -> scanPrefixBlock(tile, chunkX, chunkZ);
+                default -> { }
+            }
+        }
+
+        /** Ores of the prefix block system: large, small and bedrock ores are all one tile entity per block. */
+        private void scanPrefixBlock(TileEntity tile, int chunkX, int chunkZ) {
+            if (!(tile instanceof PrefixBlockTileEntity pTile)) return;
+            PrefixBlock pBlock = prefixBlock(pTile);
+            // a prefix block whose tile entity is somehow not backed by a prefix block any more
+            if (pBlock == null) return;
+            boolean isBedrock = mode == ScanMode.BEDROCK && pBlock.mNameInternal.contains("bedrock");
+            if (isBedrock || pBlock.mPrefix.mFamiliarPrefixes.contains(mode.PREFIX)) {
+                record(tile.xCoord - chunkX, tile.yCoord, tile.zCoord - chunkZ, pTile.mMetaData);
+            }
+        }
+
+        /** Bedrock fluid springs - see {@link #scanFluidBlock} for why the fluid and not the material is recorded. */
+        private void scanFluidSpring(TileEntity tile, int chunkX, int chunkZ) {
+            if (!(tile instanceof MultiTileEntityFluidSpring spring)) return;
+            // the spring keeps its fluid in the NBT (gt.spring -> fluidname), GT6 reads it back into mFluid. The
+            // fluid's own id is recorded, so heavy, light and medium oil stay apart in the GUI instead of all
+            // being shown as "Oil".
+            FluidStack fluidStack = spring.mFluid;
+            if (fluidStack == null || fluidStack.getFluid() == null) return;
+            record(tile.xCoord - chunkX, tile.yCoord, tile.zCoord - chunkZ, fluidID(fluidStack.getFluid()));
+        }
+
+        /** Rocks, both the ones carrying an item and the plain ones - see {@link #rockMaterial}. */
+        private void scanRock(TileEntity tile, int chunkX, int chunkZ) {
+            if (!(tile instanceof MultiTileEntityRock rock)) return;
+            record(tile.xCoord - chunkX, tile.yCoord, tile.zCoord - chunkZ, rockMaterial(rock));
+        }
+
+        /**
+         * Material of a rock, which is what the rock shows and drops.
+         * <p>
+         * A rock without an item is a perfectly normal rock: GT6 shows and drops it as the stone of the dimension it
+         * lies in, so a plain rock is counted as that stone (see {@code MultiTileEntityRock.getDefaultRock}, which
+         * gives {@code MT.Stone} in the overworld, Netherrack in the nether, Endstone in the end and so on) instead
+         * of being dropped from the result. Reading the item of a rock that has none is what used to abort the scan
+         * of the whole chunk with a NullPointerException.
+         */
+        private static short rockMaterial(MultiTileEntityRock aRock) {
+            // getRock already answers with the default of the dimension when the rock carries no item
+            short matID = oreMaterial(aRock.getRock(1));
+            if (matID == 0) matID = oreMaterial(aRock.getDefaultRock(1));
+            return matID == 0 ? MT.Stone.mID : matID;
+        }
+
+        /** Material id of an item GT6 knows, or 0 when there is no usable material on it. */
+        private static short oreMaterial(ItemStack aStack) {
+            if (aStack == null) return 0;
+            OreDictItemData data = OM.anydata_(aStack);
+            if (data == null || data.mMaterial == null || data.mMaterial.mMaterial == null) return 0;
+            return data.mMaterial.mMaterial.mID;
         }
 
         /** Tells the client the grid it has to set up; without it the per chunk messages could not be placed. */
