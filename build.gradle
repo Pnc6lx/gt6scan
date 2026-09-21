@@ -6,5 +6,5 @@ plugins {
 
 // 手动维护的版本号（gradle.properties 中已设 gtnh.modules.gitVersion = false）
 // 若要恢复 git 标签驱动版本，删除这里与 gradle.properties 中的相应行即可
-version = '1.7.5'
-ext.modVersion = '1.7.5'
+version = '1.7.6'
+ext.modVersion = '1.7.6'
