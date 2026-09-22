@@ -41,10 +41,13 @@ public class MaterialIcon implements IDrawable {
     public void draw(GuiContext context, int x, int y, int width, int height, WidgetTheme widgetTheme) {
         if (this.fluid != null) {
             GuiDraw.drawFluidTexture(this.fluid, x, y, width, height, 0);
-            GuiDraw.drawRect(x, y, width, 1, EDGE);
-            GuiDraw.drawRect(x, y + height - 1, width, 1, EDGE);
-            GuiDraw.drawRect(x, y, 1, height, EDGE);
-            GuiDraw.drawRect(x + width - 1, y, 1, height, EDGE);
+            // frame in the theme's own text colour so it contrasts with the panel of either theme: a fixed dark frame
+            // is invisible on the dark theme, a fixed light one on the light theme
+            int edge = widgetTheme == null ? EDGE : (widgetTheme.getTextColor() & 0x00FFFFFF) | 0x70000000;
+            GuiDraw.drawRect(x, y, width, 1, edge);
+            GuiDraw.drawRect(x, y + height - 1, width, 1, edge);
+            GuiDraw.drawRect(x, y, 1, height, edge);
+            GuiDraw.drawRect(x + width - 1, y, 1, height, edge);
         } else if (this.item != null) {
             GuiDraw.drawItem(this.item, x, y, width, height, 0);
         } else if (this.fallbackColour != 0) {

@@ -65,13 +65,20 @@ public class FilterRowWidget extends ButtonWidget<FilterRowWidget> {
         int textColor = state.entryListColor(matID);
         int line = theme.getTextColor();
 
-        if (selected) GuiDraw.drawRect(0, 0, 2, ROW_H, textColor);
+        if (selected) {
+            // the whole row is tinted as well: the filter state is then obvious at a glance and not only from the
+            // tick box, and the accent bar keeps the colour of the entry itself
+            GuiDraw.drawRect(0, 0, width, ROW_H, (line & 0x00FFFFFF) | 0x28000000);
+            GuiDraw.drawRect(0, 0, 2, ROW_H, textColor);
+        }
         int boxY = (ROW_H - BOX) / 2;
         GuiDraw.drawRect(2, boxY, BOX, 1, line);
         GuiDraw.drawRect(2, boxY + BOX - 1, BOX, 1, line);
         GuiDraw.drawRect(2, boxY, 1, BOX, line);
         GuiDraw.drawRect(2 + BOX - 1, boxY, 1, BOX, line);
-        if (selected) GuiDraw.drawRect(2 + 2, boxY + 2, BOX - 4, BOX - 4, textColor);
+        // the tick is filled in the colour of the box's own border: one solid block is unmistakably "ticked", while
+        // the material coloured fill it used before was too close to the border to tell the two states apart
+        if (selected) GuiDraw.drawRect(2 + 2, boxY + 2, BOX - 4, BOX - 4, line);
 
         int iconX = 2 + BOX + 3;
         icon.draw(context, iconX, 0, ROW_H, ROW_H, theme);
@@ -87,13 +94,13 @@ public class FilterRowWidget extends ButtonWidget<FilterRowWidget> {
             .color(state.entryListColor(matID)));
         tooltip.addLine(
             IKey.str(LH.get(state.isSelected(matID) ? "gt6scan.gui.row_selected" : "gt6scan.gui.row_unselected"))
-                .color(0xFF909090));
+                .color(state.mutedColor()));
         tooltip.addLine(IKey.str(LH.get("gt6scan.gui.row_hint"))
-            .color(0xFF909090));
+            .color(state.mutedColor()));
         if (state.isFiltering()) {
             tooltip.addLine(
                 IKey.str(String.format(LH.get("gt6scan.gui.filter_count"), state.selectionSize()))
-                    .color(0xFFFFD070));
+                    .color(state.headerColor()));
         }
     }
 }

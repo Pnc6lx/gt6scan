@@ -46,9 +46,6 @@ import org.lwjgl.input.Keyboard;
  */
 @SideOnly(Side.CLIENT)
 public class ScanMapWidget extends Widget<ScanMapWidget> implements Interactable {
-    private static final int FRAME_COLOR = 0xFF8B8B8B;
-    private static final int HOVER_CHUNK = 0xFFFFC040;
-    private static final int HOVER_CELL = 0xFFFFFFFF;
     /** Materials listed in the chunk tooltip at most. */
     private static final int TOOLTIP_LINES = 7;
 
@@ -63,7 +60,7 @@ public class ScanMapWidget extends Widget<ScanMapWidget> implements Interactable
     private boolean hoverInside;
     private boolean hoverHasMat;
     private String hoverName = LH.get("gt6scan.gui.nan");
-    private int hoverColor = 0xFF404040;
+    private int hoverColor;
 
     public ScanMapWidget(ScanViewState state, EntityPlayer player, int mapArea, int statusH) {
         this.state = state;
@@ -72,6 +69,8 @@ public class ScanMapWidget extends Widget<ScanMapWidget> implements Interactable
         this.statusH = statusH;
         this.scale = mapArea / (float) state.mapPx;
         this.mergeMask = new int[state.mapPx][state.mapPx];
+        // the status line is drawn in the theme's own text colour until a cell holding something is hovered
+        this.hoverColor = state.textColor();
         tooltipAutoUpdate(true).tooltipBuilder(this::buildTooltip)
             .tooltipShowUpTimer(0);
     }
@@ -83,10 +82,11 @@ public class ScanMapWidget extends Widget<ScanMapWidget> implements Interactable
         GuiDraw.drawRect(0, 0, mapArea, mapArea, state.background());
         drawCells();
         // frame, so the map viewport is visible even when the scan found nothing
-        GuiDraw.drawRect(0, 0, mapArea, 1, FRAME_COLOR);
-        GuiDraw.drawRect(0, mapArea - 1, mapArea, 1, FRAME_COLOR);
-        GuiDraw.drawRect(0, 0, 1, mapArea, FRAME_COLOR);
-        GuiDraw.drawRect(mapArea - 1, 0, 1, mapArea, FRAME_COLOR);
+        int frame = state.frameColor();
+        GuiDraw.drawRect(0, 0, mapArea, 1, frame);
+        GuiDraw.drawRect(0, mapArea - 1, mapArea, 1, frame);
+        GuiDraw.drawRect(0, 0, 1, mapArea, frame);
+        GuiDraw.drawRect(mapArea - 1, 0, 1, mapArea, frame);
 
         updateHover(context);
         drawHoverMarks();
@@ -157,7 +157,7 @@ public class ScanMapWidget extends Widget<ScanMapWidget> implements Interactable
         short matID = hoverInside ? state.shownMatAt(hoverX, hoverZ) : 0;
         hoverHasMat = matID != 0;
         hoverName = hoverHasMat ? state.entryName(matID) : LH.get("gt6scan.gui.nan");
-        hoverColor = hoverHasMat ? state.entryListColor(matID) : 0xFF404040;
+        hoverColor = hoverHasMat ? state.entryListColor(matID) : state.textColor();
     }
 
     /** Marks the hovered cell and the 16x16 chunk it belongs to, which is what the tooltip describes. */
@@ -166,23 +166,25 @@ public class ScanMapWidget extends Widget<ScanMapWidget> implements Interactable
         float chunkX = (hoverX >> 4) * ScanViewState.CELL * scale;
         float chunkZ = (hoverZ >> 4) * ScanViewState.CELL * scale;
         float chunkSize = ScanViewState.CELL * scale;
-        GuiDraw.drawRect(chunkX, chunkZ, chunkSize, 1, HOVER_CHUNK);
-        GuiDraw.drawRect(chunkX, chunkZ + chunkSize - 1, chunkSize, 1, HOVER_CHUNK);
-        GuiDraw.drawRect(chunkX, chunkZ, 1, chunkSize, HOVER_CHUNK);
-        GuiDraw.drawRect(chunkX + chunkSize - 1, chunkZ, 1, chunkSize, HOVER_CHUNK);
+        int chunkMark = state.hoverChunkColor();
+        GuiDraw.drawRect(chunkX, chunkZ, chunkSize, 1, chunkMark);
+        GuiDraw.drawRect(chunkX, chunkZ + chunkSize - 1, chunkSize, 1, chunkMark);
+        GuiDraw.drawRect(chunkX, chunkZ, 1, chunkSize, chunkMark);
+        GuiDraw.drawRect(chunkX + chunkSize - 1, chunkZ, 1, chunkSize, chunkMark);
         if (scale < 2f) return; // a cell frame would cover the whole cell
         float x = hoverX * scale, y = hoverZ * scale;
-        GuiDraw.drawRect(x, y, scale, 1, HOVER_CELL);
-        GuiDraw.drawRect(x, y + scale - 1, scale, 1, HOVER_CELL);
-        GuiDraw.drawRect(x, y, 1, scale, HOVER_CELL);
-        GuiDraw.drawRect(x + scale - 1, y, 1, scale, HOVER_CELL);
+        int cellMark = state.hoverCellColor();
+        GuiDraw.drawRect(x, y, scale, 1, cellMark);
+        GuiDraw.drawRect(x, y + scale - 1, scale, 1, cellMark);
+        GuiDraw.drawRect(x, y, 1, scale, cellMark);
+        GuiDraw.drawRect(x + scale - 1, y, 1, scale, cellMark);
     }
 
     /** Cell info plus everything the scan found inside the chunk the cell belongs to. */
     private void buildTooltip(RichTooltip tooltip) {
         if (!hoverInside) return; // empty tooltip, nothing is drawn
         tooltip.addLine(IKey.str(LH.get("gt6scan.gui.cell_info"))
-            .color(0xFFFFD070));
+            .color(state.headerColor()));
         tooltip.addLine(
             IKey.str(String.format("%d , %d : ", state.originX + hoverX, state.originZ + hoverZ) + hoverName)
                 .color(hoverColor));
@@ -191,15 +193,15 @@ public class ScanMapWidget extends Widget<ScanMapWidget> implements Interactable
         int chunkWorldZ = state.originZ + (hoverZ >> 4) * ScanViewState.CELL;
         tooltip.spaceLine();
         tooltip.addLine(IKey.str(LH.get("gt6scan.gui.chunk_info"))
-            .color(0xFFFFD070));
+            .color(state.headerColor()));
         tooltip.addLine(IKey.str(String.format("x %d - %d , z %d - %d", chunkWorldX, chunkWorldX + 15, chunkWorldZ,
                 chunkWorldZ + 15))
-            .color(0xFFB0B0B0));
+            .color(state.mutedColor()));
 
         List<Map.Entry<Short, Integer>> entries = chunkEntries(hoverX, hoverZ);
         if (entries.isEmpty()) {
             tooltip.addLine(IKey.str(LH.get("gt6scan.gui.chunk_empty"))
-                .color(0xFF909090));
+                .color(state.mutedColor()));
         } else {
             for (int i = 0; i < entries.size() && i < TOOLTIP_LINES; i++) {
                 Map.Entry<Short, Integer> entry = entries.get(i);
@@ -209,19 +211,19 @@ public class ScanMapWidget extends Widget<ScanMapWidget> implements Interactable
             }
             if (entries.size() > TOOLTIP_LINES) {
                 tooltip.addLine(IKey.str("... +" + (entries.size() - TOOLTIP_LINES))
-                    .color(0xFF909090));
+                    .color(state.mutedColor()));
             }
         }
         tooltip.spaceLine();
         // the teleport line only shows when the server said the teleport is available (cheat mode + config)
         if (state.teleportAllowed()) {
             tooltip.addLine(IKey.str(LH.get("gt6scan.gui.teleport_hint"))
-                .color(0xFF80C0FF));
+                .color(state.hintColor()));
         }
         tooltip.addLine(IKey.str(LH.get("gt6scan.gui.waypoint_hint"))
-            .color(0xFF80C0FF));
+            .color(state.hintColor()));
         tooltip.addLine(IKey.str(LH.get("gt6scan.gui.hover_hint"))
-            .color(0xFF909090));
+            .color(state.mutedColor()));
     }
 
     /**

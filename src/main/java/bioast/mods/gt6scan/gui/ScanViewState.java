@@ -41,6 +41,8 @@ public class ScanViewState {
     public static final int LIGHT_BG = 0xFFFFFFFF;
     public static final int DARK_BG = 0xFF2B2B2B;
     private static final int LIGHT_LINE = 0xFFA8A8A8, DARK_LINE = 0xFF707070;
+    /** Luma below which a colour is too dark for the dark theme's panel and gets lifted by {@link #uiColor(int)}. */
+    private static final int DARK_PANEL_MIN_LUMA = 125;
 
     public final int originX, originZ, chunkSize, mapPx;
     private final ScanMode mode;
@@ -268,9 +270,9 @@ public class ScanViewState {
         return FluidColour.of(FL.fluid(id));
     }
 
-    /** {@link #entryColor} adjusted so the label stays readable on the current panel background. */
+    /** {@link #entryColor} as the label is drawn with it: theme aware, see {@link #uiColor(int)}. */
     public int entryListColor(short id) {
-        return listColor(entryColor(id));
+        return uiColor(entryColor(id));
     }
 
     /** Localised name of a fluid, with the vanilla fallback for fluids that only have an unlocalised name. */
@@ -337,44 +339,67 @@ public class ScanViewState {
     }
 
     /**
-     * List colour, adjusted so the label stays readable on the current panel background. Dark colours are lifted on
-     * the light theme and vice versa; bright colours on a light panel (natural gas is nearly white) are darkened,
-     * which used to make the entry invisible.
+     * The single place every colour the interface draws itself goes through: the material and fluid colours of the
+     * labels, the hover line, the tooltip headings and hints, the frame of the map and its hover marks.
+     * <p>
+     * The light theme draws on a medium grey panel and both dark and bright material colours stand out against it, so
+     * nothing is adjusted there: an entry whose material is near white (natural gas, for example) is drawn in that
+     * white, exactly like on the map. Darkening it, which used to happen, made it harder to read rather than easier -
+     * on a grey panel a black label has less contrast than the white it started as.
+     * <p>
+     * Only the inverted mode changes anything. It switches the panel over to ModularUI2's dark theme, where a dark
+     * material colour would disappear into the background, so those are mixed towards white. The hue is kept and a
+     * colour is moved only as far as it has to go; everything that already contrasts with the dark panel is returned
+     * unchanged.
      */
-    public int listColor(OreDictMaterial mat) {
-        return listColor(rawColor(mat));
+    public int uiColor(int argb) {
+        if (!inverted) return argb;
+        int luma = luma(argb);
+        if (luma >= DARK_PANEL_MIN_LUMA) return argb;
+        float mix = Math.min(0.85f, (DARK_PANEL_MIN_LUMA - luma) / (float) DARK_PANEL_MIN_LUMA);
+        float r = (argb >> 16) & 0xFF, g = (argb >> 8) & 0xFF, b = argb & 0xFF;
+        r += (0xFF - r) * mix;
+        g += (0xFF - g) * mix;
+        b += (0xFF - b) * mix;
+        return 0xFF000000 | ((int) r << 16) | ((int) g << 8) | (int) b;
     }
 
-    /** Same adjustment for an already resolved colour, used by the fluid modes where the colour comes from the fluid. */
-    public int listColor(int argb) {
-        int luma = luma(argb);
-        int target = -1;
-        float mix = 0f;
-        if (!inverted) {
-            if (luma < 120) { // light panel: lift dark colours
-                target = 0xFF;
-                mix = (120 - luma) / 120f;
-            } else if (luma > 200) { // light panel: darken almost white colours
-                target = 0x40;
-                mix = 0.6f;
-            }
-        } else {
-            if (luma > 150) { // dark panel: darken bright colours
-                target = 0x30;
-                mix = (luma - 150) / 150f;
-            } else if (luma < 70) { // dark panel: lift almost black colours
-                target = 0xD0;
-                mix = 0.6f;
-            }
-        }
-        int r = (argb >> 16) & 0xFF, g = (argb >> 8) & 0xFF, b = argb & 0xFF;
-        if (target >= 0) {
-            mix = Math.min(mix, 0.85f);
-            r = (int) (r + (target - r) * mix);
-            g = (int) (g + (target - g) * mix);
-            b = (int) (b + (target - b) * mix);
-        }
-        return 0xFF000000 | (Math.min(255, r) << 16) | (Math.min(255, g) << 8) | Math.min(255, b);
+    /** Plain interface text, for example the hover line of a column that holds nothing. */
+    public int textColor() {
+        return uiColor(0xFF404040);
+    }
+
+    /** Secondary text: units, "nothing found" lines, the less important hints. */
+    public int mutedColor() {
+        return uiColor(0xFF909090);
+    }
+
+    /** Headings of the tooltip sections and of the cell info line. */
+    public int headerColor() {
+        return uiColor(0xFFFFD070);
+    }
+
+    /** The click and key hints of the tooltip (bookmark, broadcast, teleport, waypoint). */
+    public int hintColor() {
+        return uiColor(0xFF80C0FF);
+    }
+
+    /** Frame of the map viewport. */
+    public int frameColor() {
+        return uiColor(0xFF8B8B8B);
+    }
+
+    /** Hover mark of the chunk the tooltip describes. */
+    public int hoverChunkColor() {
+        return uiColor(0xFFFFC040);
+    }
+
+    /**
+     * Hover mark of the cell under the cursor. It is drawn on the map, whose background switches with the invert
+     * toggle, so the mark is white on the dark map and dark on the light one.
+     */
+    public int hoverCellColor() {
+        return inverted ? 0xFFFFFFFF : 0xFF404040;
     }
 
     /** Localised display name of a scanned material ({@code mNameLocal} only holds the English default). */
