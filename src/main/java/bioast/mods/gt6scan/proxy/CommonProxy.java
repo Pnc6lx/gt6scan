@@ -81,6 +81,9 @@ public class CommonProxy extends Abstract_Proxy {
         LH.add("gt6scan.chat.out_of_reach", "That position is out of the scanned range!");
         LH.add("gt6scan.chat.no_surface", "There is no block to stand on at that position!");
         LH.add("gt6scan.chat.no_journeymap", "JourneyMap is not installed, cannot create a waypoint.");
+        LH.add("gt6scan.chat.waypoint_created", "Created %1$s waypoint(s): %2$s");
+        LH.add("gt6scan.chat.waypoint_failed",
+            "Could not create the waypoint (%1$s), opening JourneyMap's waypoint editor.");
         LH.add("gt6scan.chat.no_nei", "NotEnoughItems is not installed, cannot add a bookmark.");
         LH.add("gt6scan.chat.bookmark_exists", "That item is already bookmarked, nothing was added.");
         LH.add("gt6scan.chat.no_bookmark_item", "That material has no item form to bookmark.");

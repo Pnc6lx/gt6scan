@@ -94,6 +94,8 @@ public final class JourneyMapBridge {
             else openEditor(player, x, y, z);
         } catch (Throwable t) {
             ScannerMod.debug.warn("Could not create the JourneyMap waypoint", t);
+            UT.Entities.chat(player,
+                Chat.RED + String.format(LH.get("gt6scan.chat.waypoint_failed"), t.toString()) + Chat.GRAY);
         }
     }
 
@@ -117,22 +119,71 @@ public final class JourneyMapBridge {
      */
     private static void writeWaypoints(EntityPlayer player, int x, int y, int z, String[] names, int[] colors) {
         WaypointStore store = WaypointStore.instance();
-        // Snapshot instead of iterating the store directly: its view is live (save() writes into it) and the
+        // Snapshot instead of iterating the store directly: its view is a live cache (save() writes into it) and the
         // snapshot also collects this batch, so a name repeated inside one click cannot slip through either.
-        List<Waypoint> existing = new ArrayList<>(store.getAll());
-        int created = 0;
+        Collection<Waypoint> all = store == null ? null : store.getAll();
+        List<Waypoint> existing = all == null ? new ArrayList<>() : new ArrayList<>(all);
+
+        List<String> created = new ArrayList<>();
+        boolean needsBulkSave = false;
+        Throwable failure = null;
         for (int i = 0; i < names.length; i++) {
             if (existsAlready(existing, names[i], x, z, player.dimension)) continue;
             Waypoint waypoint = Waypoint.at(x, y, z, Waypoint.Type.Normal, player.dimension);
             waypoint.setName(names[i]);
             waypoint.setColor(colors[i]);
-            store.save(waypoint);
+            boolean stored = false;
+            try {
+                // save() puts it into the store's cache and writes its file right away, which is what the direct
+                // flavour needs - JourneyMap 5.x keeps the whole store in a cache and only writes out dirty entries
+                store.save(waypoint);
+                stored = true;
+            } catch (Throwable t) {
+                failure = t;
+            }
+            if (!stored) {
+                try {
+                    // add() is what the store uses for a batch (bulkSave() writes every dirty entry afterwards)
+                    store.add(waypoint);
+                    needsBulkSave = true;
+                    stored = true;
+                } catch (Throwable t) {
+                    failure = t;
+                }
+            }
+            if (!stored) continue;
             existing.add(waypoint);
-            created++;
+            created.add(names[i]);
         }
-        if (created == 0) {
+        if (needsBulkSave) {
+            try {
+                store.bulkSave();
+            } catch (Throwable t) {
+                failure = t;
+            }
+        }
+        // only report what the store really holds afterwards, so the player is never told about a waypoint that did
+        // not make it (a version that silently ignores one of the two write calls would show up right here)
+        Collection<Waypoint> after = store == null ? null : store.getAll();
+        List<Waypoint> storedWaypoints = after == null ? new ArrayList<>() : new ArrayList<>(after);
+        created.removeIf(name -> !existsAlready(storedWaypoints, name, x, z, player.dimension));
+
+        if (!created.isEmpty()) {
+            UT.Entities.chat(player,
+                Chat.GREEN + String.format(LH.get("gt6scan.chat.waypoint_created"),
+                    created.size(), String.join(Chat.GRAY + ", " + Chat.GREEN, created)) + Chat.GRAY);
+            return;
+        }
+        if (failure == null) {
             UT.Entities.chat(player, Chat.YELLOW + LH.get("gt6scan.chat.waypoint_exists") + Chat.GRAY);
+            return;
         }
+        // the direct write did not work on this JourneyMap: fall back to its own editor, the flavour that always
+        // works, so the marker can still be set by hand
+        UT.Entities.chat(player,
+            Chat.RED + String.format(LH.get("gt6scan.chat.waypoint_failed"), failure.toString()) + Chat.GRAY);
+        ScannerMod.debug.warn("Could not write the JourneyMap waypoints directly", failure);
+        openEditor(player, x, y, z);
     }
 
     /**
