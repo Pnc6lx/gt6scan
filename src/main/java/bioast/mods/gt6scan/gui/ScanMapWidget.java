@@ -25,6 +25,7 @@ import bioast.mods.gt6scan.utils.ModularUIUtils;
 import cpw.mods.fml.relauncher.Side;
 import cpw.mods.fml.relauncher.SideOnly;
 import gregapi.data.LH;
+import gregapi.data.LH.Chat;
 import gregapi.util.UT;
 import org.lwjgl.input.Keyboard;
 
@@ -363,13 +364,21 @@ public class ScanMapWidget extends Widget<ScanMapWidget> implements Interactable
         if (mode == ScanMode.BEDROCK || mode == ScanMode.FLUID_BEDROCK) {
             // a bedrock vein is one material per chunk; without a scan result there is nothing to mark at all
             short id = chunkEntry(hoverX, hoverZ);
-            if (id == 0) return;
+            if (id == 0) {
+                nothingToMark();
+                return;
+            }
             JourneyMapBridge.expectWaypoints(new String[]{bedrockWaypointName(mode, id)},
                 new int[]{state.entryColor(id)});
         } else if (mode == ScanMode.DENSE_AND_NORMAL) {
             // one waypoint per material the chunk holds, so every kind the tooltip lists gets its own marker
             List<Map.Entry<Short, Integer>> entries = chunkEntries(hoverX, hoverZ);
-            if (entries.isEmpty()) return; // nothing scanned in that chunk, do not create anything
+            if (entries.isEmpty()) {
+                // nothing scanned in that chunk, so nothing is created and nothing is requested either - but the
+                // player is told, because a silent return reads as "the key does not work"
+                nothingToMark();
+                return;
+            }
             String[] names = new String[entries.size()];
             int[] colors = new int[entries.size()];
             for (int i = 0; i < entries.size(); i++) {
@@ -383,6 +392,14 @@ public class ScanMapWidget extends Widget<ScanMapWidget> implements Interactable
             JourneyMapBridge.expectEditor();
         }
         CommonProxy.simpleNetworkWrapper.sendToServer(new SurfaceRequest(worldX, worldZ, false));
+    }
+
+    /**
+     * The hovered chunk holds nothing that could be marked: the player is told so and nothing is created, which is
+     * what the mode already shows - the chunk tooltip prints "nothing found in this chunk" for the same chunk.
+     */
+    private void nothingToMark() {
+        UT.Entities.chat(player, Chat.YELLOW + LH.get("gt6scan.chat.waypoint_nothing") + Chat.GRAY);
     }
 
     /** Name of a bedrock mode waypoint: "bedrock ore (X)" / "fluid bedrock (X)" with the material or fluid of the chunk. */

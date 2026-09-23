@@ -23,6 +23,7 @@ gt6scan.chat.no_nei=未安装 NotEnoughItems，无法添加收藏。
 gt6scan.chat.bookmark_exists=该物品/流体已经在收藏页中了，未重复添加。
 gt6scan.chat.no_bookmark_item=该材料没有可收藏的物品形态。
 gt6scan.chat.waypoint_exists=该区块已经有相同的标记了，未重复创建。
+gt6scan.chat.waypoint_nothing=本区块没有值得标记的内容。
 gt6scan.chat.waypoint_created=已创建 %1$s 个路径点：%2$s
 gt6scan.chat.waypoint_failed=无法自动创建路径点（%1$s），已为你打开 JourneyMap 路径点编辑器。
 gt6scan.chat.waypoint_no_editor=无法自动创建路径点（%1$s），JourneyMap 的路径点编辑器也打不开。
