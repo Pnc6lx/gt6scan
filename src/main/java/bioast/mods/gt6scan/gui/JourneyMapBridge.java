@@ -1,5 +1,6 @@
 package bioast.mods.gt6scan.gui;
 
+import java.awt.Color;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -93,9 +94,20 @@ public final class JourneyMapBridge {
             if (directNow) writeWaypoints(player, x, y, z, names, colors);
             else openEditor(player, x, y, z);
         } catch (Throwable t) {
+            // Getting here means the direct write or the editor did not even start (a JourneyMap version that does
+            // not have one of the methods this class calls, for example), so the editor is tried once more as the
+            // last resort: it is JourneyMap's own way of creating a waypoint and therefore the one path that is
+            // always in sync with the JourneyMap that is really running.
             ScannerMod.debug.warn("Could not create the JourneyMap waypoint", t);
-            UT.Entities.chat(player,
-                Chat.RED + String.format(LH.get("gt6scan.chat.waypoint_failed"), t.toString()) + Chat.GRAY);
+            try {
+                openEditor(player, x, y, z);
+                UT.Entities.chat(player,
+                    Chat.RED + String.format(LH.get("gt6scan.chat.waypoint_failed"), t.toString()) + Chat.GRAY);
+            } catch (Throwable t2) {
+                ScannerMod.debug.warn("Could not open the JourneyMap waypoint editor either", t2);
+                UT.Entities.chat(player,
+                    Chat.RED + String.format(LH.get("gt6scan.chat.waypoint_no_editor"), t.toString()) + Chat.GRAY);
+            }
         }
     }
 
@@ -109,8 +121,9 @@ public final class JourneyMapBridge {
     }
 
     /**
-     * Writes the waypoints straight into JourneyMap's store. {@code setColor} takes the packed {@code 0xFFRRGGBB}
-     * JourneyMap uses internally, which is exactly what {@link ScanViewState#rawColor} returns.
+     * Writes the waypoints straight into JourneyMap's store. Every waypoint carries the packed {@code 0xFFRRGGBB}
+     * colour {@link ScanViewState#rawColor} returns, handed to the waypoint's constructor rather than set afterwards -
+     * see the loop below for why that is not the same thing.
      * <p>
      * Every waypoint is checked against what JourneyMap already holds first: a marker of the same name in the same
      * chunk of the same dimension is skipped, so clicking around one vein (or double clicking a cell) does not pile
@@ -129,9 +142,23 @@ public final class JourneyMapBridge {
         Throwable failure = null;
         for (int i = 0; i < names.length; i++) {
             if (existsAlready(existing, names[i], x, z, player.dimension)) continue;
-            Waypoint waypoint = Waypoint.at(x, y, z, Waypoint.Type.Normal, player.dimension);
-            waypoint.setName(names[i]);
-            waypoint.setColor(colors[i]);
+            Waypoint waypoint;
+            try {
+                // Name and colour go into the constructor instead of being set afterwards. JourneyMap's setColor
+                // takes an Integer up to 5.1.4 and an int from 5.2 on, so a call to it is bound to the version this
+                // mod was compiled against and dies with a NoSuchMethodError on every other one. The constructor
+                // exists unchanged in both versions and it takes the final name as well, which keeps the waypoint's
+                // id in sync: the id is built from the name, so renaming a waypoint that Waypoint.at() created left
+                // every waypoint of one cell sharing the id - and the file - of that coordinate name, and only the
+                // last of them survived. The colour is 0xRRGGBB here, which is what java.awt.Color and JourneyMap
+                // both use.
+                waypoint = new Waypoint(names[i], x, y, z, new Color(colors[i] & 0xFFFFFF),
+                    Waypoint.Type.Normal, player.dimension);
+            } catch (Throwable t) {
+                // inside the loop: a JourneyMap that cannot build one waypoint still gets all the others
+                failure = t;
+                continue;
+            }
             boolean stored = false;
             try {
                 // save() puts it into the store's cache and writes its file right away, which is what the direct
